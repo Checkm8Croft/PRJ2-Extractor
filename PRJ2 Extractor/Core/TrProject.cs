@@ -60,7 +60,7 @@ public class TrProject : IDisposable
         WasFilePath = "NA ";
         UnusedAnimRanges = Enumerable.Range(0, 40).Select(i => (uint)i).ToArray();
         AnimTextures = Enumerable.Repeat(0xFFFFFFFFu, 256).ToArray();
-        AnimRanges = new AnimTex[40];
+        AnimRanges = Enumerable.Range(0, 40).Select(_ => new AnimTex()).ToArray();
         TextureSounds = Enumerable.Repeat((byte)6, 256).ToArray();
         BumpSettings = new byte[256];
         InvalidHeights = [];
@@ -78,6 +78,8 @@ public class TrProject : IDisposable
     {
         foreach (char c in s)
             bw.Write(c);
+        if (!s.EndsWith(' '))
+            bw.Write(' ');
     }
 
     private static void WriteArray(uint[] a, BinaryWriter bw)

@@ -162,9 +162,9 @@ public class TrLevel : IDisposable
                     {
                         byte bl = br3.ReadByte(), gr = br3.ReadByte(), rd = br3.ReadByte(), al = br3.ReadByte();
                         if (al == 0) { bl = 255; rd = 255; gr = 0; }
-                        allPixels[offset++] = rd;
-                        allPixels[offset++] = gr;
                         allPixels[offset++] = bl;
+                        allPixels[offset++] = gr;
+                        allPixels[offset++] = rd;
                     }
                 }
                 if (NumBumpTextiles > 0)
@@ -177,9 +177,9 @@ public class TrLevel : IDisposable
                         {
                             byte bl = br3.ReadByte(), gr = br3.ReadByte(), rd = br3.ReadByte(), al = br3.ReadByte();
                             if (al == 0) { bl = 255; rd = 255; gr = 0; }
-                            allPixels[offset++] = rd;
-                            allPixels[offset++] = gr;
                             allPixels[offset++] = bl;
+                            allPixels[offset++] = gr;
+                            allPixels[offset++] = rd;
                         }
                     }
                 }
@@ -430,6 +430,7 @@ public class TrLevel : IDisposable
             {
                 int b = j * r1.NumX + k;
                 var sector = r1.Sectors[b];
+                p.Rooms[i].Blocks[b] = new Block();
                 var block = p.Rooms[i].Blocks[b];
                 block.Id = 1;
                 block.Floor = (short)-sector.Floor;
