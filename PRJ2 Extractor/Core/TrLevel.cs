@@ -25,6 +25,7 @@ public class TrLevel : IDisposable
     public ushort[] FloorData = [];
     public LevelRoom[] Rooms = [];
     public LevelBox[] Boxes = [];
+    public ObjectTexture[] ObjectTextures = [];
 
     public void Dispose()
     {
@@ -226,7 +227,9 @@ public class TrLevel : IDisposable
                     YTop = br2.ReadInt32()
                 };
                 size = br2.ReadUInt32();
-                geometry.Seek(size * 2, SeekOrigin.Current);
+                var roomDataEnd = geometry.Position + size * 2;
+                ReadRoomData(br2, r);
+                geometry.Position = roomDataEnd;
                 r.NumPortals = br2.ReadUInt16();
                 r.Portals = new Portal[r.NumPortals];
                 for (int j = 0; j < r.NumPortals; j++)
@@ -322,7 +325,9 @@ public class TrLevel : IDisposable
                 result = 4;
             }
             size = br2.ReadUInt32();
-            geometry.Seek(size * 38, SeekOrigin.Current);
+            ObjectTextures = new ObjectTexture[size];
+            for (int i = 0; i < ObjectTextures.Length; i++)
+                ObjectTextures[i] = ReadObjectTexture(br2);
             progress?.Report(100);
         }
         finally
@@ -350,6 +355,70 @@ public class TrLevel : IDisposable
             }
         }
         return result;
+    }
+
+    private static void ReadRoomData(BinaryReader br, LevelRoom room)
+    {
+        short numVertices = br.ReadInt16();
+        room.Vertices = new RoomVertex[Math.Max(0, (int)numVertices)];
+        for (int i = 0; i < room.Vertices.Length; i++)
+        {
+            room.Vertices[i] = new RoomVertex
+            {
+                X = br.ReadInt16(),
+                Y = br.ReadInt16(),
+                Z = br.ReadInt16(),
+                Lighting = br.ReadInt16(),
+                Attributes = br.ReadUInt16(),
+                Colour = br.ReadUInt16()
+            };
+        }
+
+        short numRectangles = br.ReadInt16();
+        room.Rectangles = new RoomFace[Math.Max(0, (int)numRectangles)];
+        for (int i = 0; i < room.Rectangles.Length; i++)
+            room.Rectangles[i] = ReadRoomFace(br, 4);
+
+        short numTriangles = br.ReadInt16();
+        room.Triangles = new RoomFace[Math.Max(0, (int)numTriangles)];
+        for (int i = 0; i < room.Triangles.Length; i++)
+        {
+            room.Triangles[i] = ReadRoomFace(br, 3);
+            room.Triangles[i].IsTriangle = true;
+        }
+
+        short numSprites = br.ReadInt16();
+        if (numSprites > 0)
+            br.BaseStream.Seek(numSprites * 4L, SeekOrigin.Current);
+    }
+
+    private static RoomFace ReadRoomFace(BinaryReader br, int vertexCount)
+    {
+        var face = new RoomFace { Vertices = new ushort[vertexCount], IsTriangle = vertexCount == 3 };
+        for (int i = 0; i < face.Vertices.Length; i++)
+            face.Vertices[i] = br.ReadUInt16();
+        face.Texture = br.ReadUInt16();
+        return face;
+    }
+
+    private static ObjectTexture ReadObjectTexture(BinaryReader br)
+    {
+        var texture = new ObjectTexture
+        {
+            Attribute = br.ReadUInt16(),
+            TileAndFlag = br.ReadUInt16(),
+            NewFlags = br.ReadUInt16()
+        };
+        for (int i = 0; i < texture.Vertices.Length; i++)
+        {
+            texture.Vertices[i].X = br.ReadUInt16();
+            texture.Vertices[i].Y = br.ReadUInt16();
+        }
+        texture.OriginalU = br.ReadUInt32();
+        texture.OriginalV = br.ReadUInt32();
+        texture.Width = br.ReadUInt32();
+        texture.Height = br.ReadUInt32();
+        return texture;
     }
 
     private static Portal ReadPortal(BinaryReader br)
@@ -515,8 +584,124 @@ public class TrLevel : IDisposable
                     }
                 }
             }
+
+            ApplyRoomMeshTextures(p.Rooms[i], r1, ObjectTextures.Length);
         }
+
+        BuildPrjTextureTable(p);
         return p;
+    }
+
+    private void BuildPrjTextureTable(TrProject p)
+    {
+        int count = Math.Min(ObjectTextures.Length, 1024);
+        p.NumTextures = (uint)count;
+        p.Textures = new TexInfo[count];
+        for (int i = 0; i < count; i++)
+            p.Textures[i] = ToPrjTexInfo(ObjectTextures[i]);
+    }
+
+    private static TexInfo ToPrjTexInfo(ObjectTexture texture)
+    {
+        int tile = texture.TileAndFlag & 0x7FFF;
+        int minX = texture.Vertices.Min(v => v.X >> 8);
+        int maxX = texture.Vertices.Max(v => v.X >> 8);
+        int minY = texture.Vertices.Min(v => v.Y >> 8);
+        int maxY = texture.Vertices.Max(v => v.Y >> 8);
+
+        minX = Math.Clamp(minX, 0, 255);
+        maxX = Math.Clamp(maxX, minX, 255);
+        minY = Math.Clamp(minY, 0, 255);
+        maxY = Math.Clamp(maxY, minY, 255);
+
+        return new TexInfo
+        {
+            X = (byte)minX,
+            Y = (ushort)((tile * 256) + minY),
+            Unused = 0,
+            FlipX = 0,
+            Right = (byte)Math.Max(1, maxX - minX),
+            FlipY = 0,
+            Bottom = (byte)Math.Max(1, maxY - minY)
+        };
+    }
+
+    private static void ApplyRoomMeshTextures(PrjRoom prjRoom, LevelRoom levelRoom, int objectTextureCount)
+    {
+        foreach (var face in levelRoom.Rectangles)
+            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextureCount);
+        foreach (var face in levelRoom.Triangles)
+            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextureCount);
+    }
+
+    private static void ApplyRoomFaceTexture(PrjRoom prjRoom, LevelRoom levelRoom, RoomFace face, int objectTextureCount)
+    {
+        int textureIndex = face.Texture & 0x7FFF;
+        if (textureIndex < 0 || textureIndex >= objectTextureCount || textureIndex > 1023) return;
+        var vertices = face.Vertices
+            .Where(v => v < levelRoom.Vertices.Length)
+            .Select(v => levelRoom.Vertices[v])
+            .ToArray();
+        if (vertices.Length != face.Vertices.Length) return;
+
+        int minX = vertices.Min(v => v.X), maxX = vertices.Max(v => v.X);
+        int minY = vertices.Min(v => v.Y), maxY = vertices.Max(v => v.Y);
+        int minZ = vertices.Min(v => v.Z), maxZ = vertices.Max(v => v.Z);
+        int avgX = (int)Math.Round(vertices.Average(v => v.X));
+        int avgY = (int)Math.Round(vertices.Average(v => v.Y));
+        int avgZ = (int)Math.Round(vertices.Average(v => v.Z));
+
+        int slot;
+        int blockX;
+        int blockZ;
+        const int epsilon = 8;
+
+        if (Math.Abs(maxY - minY) <= epsilon)
+        {
+            blockX = Math.Clamp(avgX / 1024, 0, prjRoom.XSize - 1);
+            blockZ = Math.Clamp(avgZ / 1024, 0, prjRoom.ZSize - 1);
+            int blockIndex = blockZ * prjRoom.XSize + blockX;
+            if (blockIndex < 0 || blockIndex >= prjRoom.Blocks.Length) return;
+
+            int floorY = -prjRoom.Blocks[blockIndex].Floor * 256;
+            int ceilingY = -prjRoom.Blocks[blockIndex].Ceiling * 256;
+            if (Math.Abs(avgY - floorY) <= Math.Abs(avgY - ceilingY))
+                slot = face.IsTriangle ? 8 : 0;
+            else
+                slot = face.IsTriangle ? 9 : 1;
+        }
+        else if (Math.Abs(maxX - minX) <= epsilon)
+        {
+            blockX = Math.Clamp((int)Math.Round(avgX / 1024.0), 0, prjRoom.XSize - 1);
+            blockZ = Math.Clamp(avgZ / 1024, 0, prjRoom.ZSize - 1);
+            slot = 4;
+        }
+        else if (Math.Abs(maxZ - minZ) <= epsilon)
+        {
+            blockX = Math.Clamp(avgX / 1024, 0, prjRoom.XSize - 1);
+            blockZ = Math.Clamp((int)Math.Round(avgZ / 1024.0), 0, prjRoom.ZSize - 1);
+            slot = 7;
+        }
+        else
+        {
+            return;
+        }
+
+        int target = blockZ * prjRoom.XSize + blockX;
+        if (target < 0 || target >= prjRoom.Blocks.Length) return;
+        SetBlockTexture(prjRoom.Blocks[target].Textures[slot], textureIndex, face);
+    }
+
+    private static void SetBlockTexture(BlockTex blockTex, int textureIndex, RoomFace face)
+    {
+        blockTex.Tipo = 0x0007;
+        blockTex.Index = (byte)(textureIndex & 0xFF);
+        blockTex.Flags1 = (byte)((textureIndex >> 8) & 0x03);
+        if ((face.Texture & 0x8000) != 0)
+            blockTex.Flags1 |= 0x04;
+        blockTex.Rotation = 0;
+        blockTex.Triangle = 0;
+        blockTex.Filler = 0;
     }
 
     private static void ApplyFloorData(Block block, ParsedFloorData fd, LevelRoom r1, bool fixFdivs)

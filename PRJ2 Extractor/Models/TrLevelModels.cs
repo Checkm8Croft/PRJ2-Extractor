@@ -38,6 +38,35 @@ public class Vertex
     public short X, Y, Z;
 }
 
+public class RoomVertex
+{
+    public short X, Y, Z;
+    public short Lighting;
+    public ushort Attributes, Colour;
+}
+
+public class RoomFace
+{
+    public ushort[] Vertices = [];
+    public ushort Texture;
+    public bool IsTriangle;
+}
+
+public class TextureVertex
+{
+    public ushort X, Y;
+}
+
+public class ObjectTexture
+{
+    public ushort Attribute;
+    public ushort TileAndFlag;
+    public ushort NewFlags;
+    public TextureVertex[] Vertices = { new(), new(), new(), new() };
+    public uint OriginalU, OriginalV;
+    public uint Width, Height;
+}
+
 public class Portal
 {
     public ushort ToRoom;
@@ -53,6 +82,9 @@ public class RoomColour
 public class LevelRoom
 {
     public int X, Z, YBottom, YTop;
+    public RoomVertex[] Vertices = [];
+    public RoomFace[] Rectangles = [];
+    public RoomFace[] Triangles = [];
     public ushort NumZ, NumX;
     public LevelSector[] Sectors = [];
     public ushort NumPortals;
