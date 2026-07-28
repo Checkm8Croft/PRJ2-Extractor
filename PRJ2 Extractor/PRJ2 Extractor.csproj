@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -8,5 +8,104 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="TombLib">
+      <HintPath>C:\Tomb Editor\TombLib.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="AssimpNet">
+      <HintPath>C:\Tomb Editor\AssimpNet.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Blake3">
+      <HintPath>C:\Tomb Editor\Blake3.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="bzPSD">
+      <HintPath>C:\Tomb Editor\bzPSD.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="ColorThief.Netstandard.v20">
+      <HintPath>C:\Tomb Editor\ColorThief.Netstandard.v20.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="DirectXTexNet">
+      <HintPath>C:\Tomb Editor\DirectXTexNet.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="FreeImage.Standard">
+      <HintPath>C:\Tomb Editor\FreeImage.Standard.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="K4os.Compression.LZ4">
+      <HintPath>C:\Tomb Editor\K4os.Compression.LZ4.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="K4os.Compression.LZ4.Streams">
+      <HintPath>C:\Tomb Editor\K4os.Compression.LZ4.Streams.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="K4os.Hash.xxHash">
+      <HintPath>C:\Tomb Editor\K4os.Hash.xxHash.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="NAudio">
+      <HintPath>C:\Tomb Editor\NAudio.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="NAudio.Core">
+      <HintPath>C:\Tomb Editor\NAudio.Core.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="NAudio.Flac">
+      <HintPath>C:\Tomb Editor\NAudio.Flac.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="NAudio.Vorbis">
+      <HintPath>C:\Tomb Editor\NAudio.Vorbis.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="NAudio.WinMM">
+      <HintPath>C:\Tomb Editor\NAudio.WinMM.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="NAudio.Wasapi">
+      <HintPath>C:\Tomb Editor\NAudio.Wasapi.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="NAudio.Asio">
+      <HintPath>C:\Tomb Editor\NAudio.Asio.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="NAudio.Midi">
+      <HintPath>C:\Tomb Editor\NAudio.Midi.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="NVorbis">
+      <HintPath>C:\Tomb Editor\NVorbis.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="NLog">
+      <HintPath>C:\Tomb Editor\NLog.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Pfim">
+      <HintPath>C:\Tomb Editor\Pfim.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Microsoft.IO.RecyclableMemoryStream">
+      <HintPath>C:\Tomb Editor\Microsoft.IO.RecyclableMemoryStream.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="System.IO.Hashing">
+      <HintPath>C:\Tomb Editor\System.IO.Hashing.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>C:\Tomb Editor\Newtonsoft.Json.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
 
 </Project>

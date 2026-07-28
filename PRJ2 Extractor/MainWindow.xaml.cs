@@ -242,6 +242,33 @@ public partial class MainWindow : Window
             MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
+    private void ExportPrj2_Click(object sender, RoutedEventArgs e)
+    {
+        if (_level == null) return;
+
+        var dlg = new SaveFileDialog
+        {
+            DefaultExt = "prj2",
+            Filter = "Tomb Editor Project Files (*.prj2)|*.prj2",
+            FileName = string.IsNullOrEmpty(_lastTr4Path)
+                ? "output"
+                : Path.GetFileNameWithoutExtension(_lastTr4Path)
+        };
+
+        if (dlg.ShowDialog() != true) return;
+
+        try
+        {
+            Prj2Exporter.Export(_level, dlg.FileName);
+            MessageBox.Show($"{Path.GetFileName(dlg.FileName)} saved.", "Information",
+                MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Error exporting PRJ2: {ex.Message}", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     private void SaveTga_Click(object sender, RoutedEventArgs e)
     {
         if (_level?.TextureBitmap == null) return;
@@ -300,6 +327,7 @@ public partial class MainWindow : Window
     {
         var hasLevel = _level != null;
         SaveAsMenuItem.IsEnabled = hasLevel;
+        ExportPrj2MenuItem.IsEnabled = hasLevel;
         LoadPrjButton.IsEnabled = hasLevel;
         UnloadPrjButton.IsEnabled = _aktrekker != null;
         CopyDoorsCheckBox.IsEnabled = _aktrekker != null;
