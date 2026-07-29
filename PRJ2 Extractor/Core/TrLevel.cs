@@ -721,11 +721,16 @@ public class TrLevel : IDisposable
 
         if (fd.Tipo == FloorType.Tilt)
         {
-            if (fd.AddX >= 0) { block.FloorCorner[2] = fd.AddX; block.FloorCorner[3] = fd.AddX; }
-            else { block.FloorCorner[0] = (sbyte)-fd.AddX; block.FloorCorner[1] = (sbyte)-fd.AddX; }
-            if (fd.AddZ >= 0) { block.FloorCorner[0] += fd.AddZ; block.FloorCorner[3] += fd.AddZ; }
-            else { block.FloorCorner[2] += (sbyte)Math.Abs(fd.AddZ); block.FloorCorner[1] += (sbyte)Math.Abs(fd.AddZ); }
-            block.Floor -= (short)(Math.Abs(fd.AddX) + Math.Abs(fd.AddZ));
+            // Function 0x02 (Floor Slant), per TRosettaStone: corner naming is (X,Z) as 00/01/10/11.
+            // Block.FloorCorner index mapping used throughout this project: [0]=XpZn(10) [1]=XnZn(00) [2]=XnZp(01) [3]=XpZp(11).
+            // AddX>0 adds to corners 00,01 (XnZn,XnZp); AddX<0 subtracts from corners 10,11 (XpZn,XpZp).
+            // AddZ>0 adds to corners 00,10 (XnZn,XpZn); AddZ<0 subtracts from corners 01,11 (XnZp,XpZp).
+            // Deltas are added directly to the (unmodified) base floor height -- no baseline lowering,
+            // so that neighbouring sectors' shared-edge corner heights remain directly comparable.
+            if (fd.AddX > 0) { block.FloorCorner[1] += (sbyte)fd.AddX; block.FloorCorner[2] += (sbyte)fd.AddX; }
+            else if (fd.AddX < 0) { block.FloorCorner[0] += (sbyte)fd.AddX; block.FloorCorner[3] += (sbyte)fd.AddX; }
+            if (fd.AddZ > 0) { block.FloorCorner[0] += (sbyte)fd.AddZ; block.FloorCorner[1] += (sbyte)fd.AddZ; }
+            else if (fd.AddZ < 0) { block.FloorCorner[2] += (sbyte)fd.AddZ; block.FloorCorner[3] += (sbyte)fd.AddZ; }
             if (fixFdivs)
             {
                 int v = -Math.Abs(block.Floor - (-r1.YBottom / 256));
@@ -736,11 +741,15 @@ public class TrLevel : IDisposable
 
         if (fd.Tipo == FloorType.Roof)
         {
-            if (fd.AddX >= 0) { block.CeilCorner[0] = (sbyte)-fd.AddX; block.CeilCorner[1] = (sbyte)-fd.AddX; }
-            else { block.CeilCorner[2] = fd.AddX; block.CeilCorner[3] = fd.AddX; }
-            if (fd.AddZ >= 0) { block.CeilCorner[1] -= fd.AddZ; block.CeilCorner[2] -= fd.AddZ; }
-            else { block.CeilCorner[0] += fd.AddZ; block.CeilCorner[3] += fd.AddZ; }
-            block.Ceiling += (short)(Math.Abs(fd.AddX) + Math.Abs(fd.AddZ));
+            // Function 0x03 (Ceiling Slant), per TRosettaStone.
+            // Block.CeilCorner index mapping (matches classic-PRJ on-disk byte order, verified against
+            // TrProject's raw sequential read/write and TombLib's PrjLoader): [0]=XpZp(11) [1]=XnZp(01) [2]=XnZn(00) [3]=XpZn(10).
+            // AddX>0 subtracts from corners 10,11 (XpZn,XpZp); AddX<0 adds to corners 00,01 (XnZn,XnZp).
+            // AddZ>0 subtracts from corners 00,10 (XnZn,XpZn); AddZ<0 adds to corners 01,11 (XnZp,XpZp).
+            if (fd.AddX > 0) { block.CeilCorner[3] -= (sbyte)fd.AddX; block.CeilCorner[0] -= (sbyte)fd.AddX; }
+            else if (fd.AddX < 0) { block.CeilCorner[2] += (sbyte)(-fd.AddX); block.CeilCorner[1] += (sbyte)(-fd.AddX); }
+            if (fd.AddZ > 0) { block.CeilCorner[2] -= (sbyte)fd.AddZ; block.CeilCorner[3] -= (sbyte)fd.AddZ; }
+            else if (fd.AddZ < 0) { block.CeilCorner[1] += (sbyte)(-fd.AddZ); block.CeilCorner[0] += (sbyte)(-fd.AddZ); }
             if (fixFdivs)
             {
                 int v = Math.Abs((-r1.YTop / 256) - block.Ceiling);

@@ -259,8 +259,11 @@ public partial class MainWindow : Window
 
         try
         {
-            Prj2Exporter.Export(_level, dlg.FileName);
-            MessageBox.Show($"{Path.GetFileName(dlg.FileName)} saved.", "Information",
+            var warnings = Prj2Exporter.Export(_level, dlg.FileName);
+            var extra = warnings.Count > 0
+                ? Environment.NewLine + $"{warnings.Count} portal(s) skipped, see log."
+                : "";
+            MessageBox.Show($"{Path.GetFileName(dlg.FileName)} saved.{extra}", "Information",
                 MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception ex)
