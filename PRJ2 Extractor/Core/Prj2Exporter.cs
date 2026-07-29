@@ -88,21 +88,18 @@ public static class Prj2Exporter
                     sector.Ceiling.XnZn = (short)Clicks.ToWorld(block.CeilCorner[2] + block.Ceiling);
                     sector.Ceiling.XpZn = (short)Clicks.ToWorld(block.CeilCorner[3] + block.Ceiling);
 
-                    if (block.FDiv[0] != 0 || block.FDiv[1] != 0 || block.FDiv[2] != 0 || block.FDiv[3] != 0)
-                    {
-                        sector.SetHeight(SectorVerticalPart.Floor2, SectorEdge.XpZn, Clicks.ToWorld(block.FDiv[0] + block.Floor));
-                        sector.SetHeight(SectorVerticalPart.Floor2, SectorEdge.XnZn, Clicks.ToWorld(block.FDiv[1] + block.Floor));
-                        sector.SetHeight(SectorVerticalPart.Floor2, SectorEdge.XnZp, Clicks.ToWorld(block.FDiv[2] + block.Floor));
-                        sector.SetHeight(SectorVerticalPart.Floor2, SectorEdge.XpZp, Clicks.ToWorld(block.FDiv[3] + block.Floor));
-                    }
-
-                    if (block.CDiv[0] != 0 || block.CDiv[1] != 0 || block.CDiv[2] != 0 || block.CDiv[3] != 0)
-                    {
-                        sector.SetHeight(SectorVerticalPart.Ceiling2, SectorEdge.XpZp, Clicks.ToWorld(block.CDiv[0] + block.Ceiling));
-                        sector.SetHeight(SectorVerticalPart.Ceiling2, SectorEdge.XnZp, Clicks.ToWorld(block.CDiv[1] + block.Ceiling));
-                        sector.SetHeight(SectorVerticalPart.Ceiling2, SectorEdge.XnZn, Clicks.ToWorld(block.CDiv[2] + block.Ceiling));
-                        sector.SetHeight(SectorVerticalPart.Ceiling2, SectorEdge.XpZn, Clicks.ToWorld(block.CDiv[3] + block.Ceiling));
-                    }
+                    // Diagonal-split triangulation (TR FloorData functions 0x07-0x12). TombLib's
+                    // SectorSurface.SplitDirectionIsXEqualsZ (NOT the DiagonalSplit enum, which is
+                    // only for portal sub-triangles we don't yet model) picks which diagonal the
+                    // sector's 2 collision/render triangles are split along. When left at its
+                    // default (auto-detected from the 4 corners), a non-coplanar quad still renders
+                    // as 2 triangles, but along whichever diagonal happens to look flattest -- not
+                    // necessarily the one TR4 actually intended, which is what was producing
+                    // "illegal slope" sectors even though the 4 corner heights were individually correct.
+                    if (block.FloorSplitXEqualsZ.HasValue)
+                        sector.Floor.SplitDirectionIsXEqualsZ = block.FloorSplitXEqualsZ.Value;
+                    if (block.CeilingSplitXEqualsZ.HasValue)
+                        sector.Ceiling.SplitDirectionIsXEqualsZ = block.CeilingSplitXEqualsZ.Value;
                 }
                 else
                 {

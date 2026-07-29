@@ -66,6 +66,14 @@ public class Block
     public BlockTex[] Textures = Enumerable.Range(0, 14).Select(_ => new BlockTex()).ToArray();
     public ushort Flags2, Flags3;
 
+    // Diagonal-split triangulation (TR3+ FloorData functions 0x07-0x12), used to build
+    // TombLib's Sector.Floor/Ceiling.DiagonalSplit -- NOT related to FDiv/CDiv above, which
+    // encode an unrelated classic-PRJ/NGLE "extra floor level" feature.
+    // FloorSplit/CeilingSplit: null = no triangulation (single plane / Tilt / flat).
+    // true = diagonal runs XnZn-XpZp ("NE-SW"), false = diagonal runs XnZp-XpZn ("NW-SE").
+    public bool? FloorSplitXEqualsZ;
+    public bool? CeilingSplitXEqualsZ;
+
     public bool HasCornerDataFloor =>
         FloorCorner.Any(c => c != 0);
 

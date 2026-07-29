@@ -779,6 +779,9 @@ public class TrLevel : IDisposable
         int[] a = { fd.Corners[0], fd.Corners[1], fd.Corners[2], fd.Corners[3] };
         int maxCorner = a.Max();
         block.Floor -= (short)maxCorner;
+        // Split1(0x07)/Nocol1(0x0B)/Nocol2(0x0C): NW-SE diagonal (XnZp-XpZn) -> SplitDirectionIsXEqualsZ=false.
+        // Split2(0x08)/Nocol3(0x0D)/Nocol4(0x0E): NE-SW diagonal (XnZn-XpZp) -> SplitDirectionIsXEqualsZ=true.
+        block.FloorSplitXEqualsZ = fd.Tipo is FloorType.Split2 or FloorType.Nocol3 or FloorType.Nocol4;
 
         if (fd.Tipo is FloorType.Split2 or FloorType.Nocol3 or FloorType.Nocol4)
         {
@@ -810,6 +813,9 @@ public class TrLevel : IDisposable
         block.CeilCorner[2] = (sbyte)-fd.Corners[2];
         block.CeilCorner[3] = (sbyte)-fd.Corners[3];
         int maxCorner = fd.Corners.Max();
+        // Split3(0x09)/Nocol5(0x0F)/Nocol6(0x10): "NW" ceiling diagonal -> SplitDirectionIsXEqualsZ=false.
+        // Split4(0x0A)/Nocol7(0x11)/Nocol8(0x12): "NE" ceiling diagonal -> SplitDirectionIsXEqualsZ=true.
+        block.CeilingSplitXEqualsZ = fd.Tipo is FloorType.Split4 or FloorType.Nocol7 or FloorType.Nocol8;
         block.Ceiling += (short)maxCorner;
         if (fd.Tipo is FloorType.Nocol5 or FloorType.Nocol7) block.Flags2 |= 0x10;
         if (fd.Tipo is FloorType.Nocol6 or FloorType.Nocol8) block.Flags2 |= 0x8;
