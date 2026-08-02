@@ -10,6 +10,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\PRJ2 Extractor\PRJ2 Extractor.csproj" />
+    <Reference Include="TombLib">
+      <HintPath>C:\Tomb Editor\TombLib.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

@@ -4,6 +4,7 @@ using TombLib;
 using TombLib.LevelData;
 using TombLib.LevelData.IO;
 using TombLib.LevelData.SectorEnums;
+using System.Diagnostics;
 
 namespace PRJ2_Extractor.Core;
 
@@ -23,6 +24,7 @@ public static class Prj2Exporter
     public static List<string> Export(TrLevel trLevel, string prj2FilePath)
     {
         var warnings = new List<string>();
+        var problematicRows = new HashSet<int> { 104, 103, 60, 61, 48, 49, 52, 24, 17 };
 
         // Reuse the existing, proven TR4 -> classic-PRJ-model conversion for all the hard geometry work
         // (floor data / tilts / splits / door-portal detection / alternate room bookkeeping).
@@ -75,10 +77,10 @@ public static class Prj2Exporter
                     // Base height + per-corner delta (in clicks) -> world units.
                     // Corner order follows the classic PRJ on-disk layout used by TombLib's PrjLoader:
                     // floor corners are [XpZn, XnZn, XnZp, XpZp].
-                    sector.Floor.XpZn = (short)Clicks.ToWorld(block.FloorCorner[0] + block.Floor);
-                    sector.Floor.XnZn = (short)Clicks.ToWorld(block.FloorCorner[1] + block.Floor);
-                    sector.Floor.XnZp = (short)Clicks.ToWorld(block.FloorCorner[2] + block.Floor);
-                    sector.Floor.XpZp = (short)Clicks.ToWorld(block.FloorCorner[3] + block.Floor);
+                    sector.Floor.XpZn = (short)Clicks.ToWorld(block.FloorCorner[3] + block.Floor);
+                    sector.Floor.XnZn = (short)Clicks.ToWorld(block.FloorCorner[2] + block.Floor);
+                    sector.Floor.XnZp = (short)Clicks.ToWorld(block.FloorCorner[1] + block.Floor);
+                    sector.Floor.XpZp = (short)Clicks.ToWorld(block.FloorCorner[0] + block.Floor);
 
                     // NOTE (interpretazione, verificata contro l'ordine di lettura in PrjLoader.cs):
                     // nel formato PRJ classico l'ordine degli angoli del soffitto è invertito
@@ -145,7 +147,9 @@ public static class Prj2Exporter
         // TR4 sometimes encodes a single opening as several adjacent/overlapping quads (e.g. large
         // or non-trivially shaped portals get split during level compilation). TombLib only allows
         // one portal per sector face, so we group raw doors by (room, direction, adjoining room) and
-        // add a single portal covering the union of their sector areas.
+        // add a single portal covering the union of their sector areas. (Tried adding each door
+        // individually largest-first instead: empirically worse -- 127 vs 114 conflicts on alexhub2 --
+        // so the union grouping stays.)
         for (int i = 0; i < p.Rooms.Length; i++)
         {
             var pr = p.Rooms[i];

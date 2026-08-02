@@ -7,7 +7,6 @@ string prj2Path = @"C:\Users\Checkm8ra1n\Documents\alexhub2.prj2";
 using var level = new TrLevel();
 byte loadResult = level.Load(tr4Path, new Progress<int>(v => { }));
 if (loadResult != 0) { Console.WriteLine($"Load failed: {loadResult}"); return 1; }
-Console.WriteLine($"Loaded OK. Rooms: {level.NumRooms}");
 
 try
 {
@@ -15,6 +14,7 @@ try
     var info = new FileInfo(prj2Path);
     Console.WriteLine($"PRJ2 export OK -> {prj2Path} ({info.Length} bytes)");
     Console.WriteLine($"Portal warnings: {warnings.Count}");
+    foreach (var w in warnings.Take(20)) Console.WriteLine("  " + w);
 }
 catch (Exception ex)
 {

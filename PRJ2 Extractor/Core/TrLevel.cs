@@ -808,15 +808,15 @@ public class TrLevel : IDisposable
 
     private static void ApplyCeilingSplit(Block block, ParsedFloorData fd)
     {
-        block.CeilCorner[0] = (sbyte)-fd.Corners[0];
-        block.CeilCorner[1] = (sbyte)-fd.Corners[1];
-        block.CeilCorner[2] = (sbyte)-fd.Corners[2];
-        block.CeilCorner[3] = (sbyte)-fd.Corners[3];
+        block.CeilCorner[0] = (sbyte)fd.Corners[0];
+        block.CeilCorner[1] = (sbyte)fd.Corners[1];
+        block.CeilCorner[2] = (sbyte)fd.Corners[2];
+        block.CeilCorner[3] = (sbyte)fd.Corners[3];
         int maxCorner = fd.Corners.Max();
         // Split3(0x09)/Nocol5(0x0F)/Nocol6(0x10): "NW" ceiling diagonal -> SplitDirectionIsXEqualsZ=false.
         // Split4(0x0A)/Nocol7(0x11)/Nocol8(0x12): "NE" ceiling diagonal -> SplitDirectionIsXEqualsZ=true.
         block.CeilingSplitXEqualsZ = fd.Tipo is FloorType.Split4 or FloorType.Nocol7 or FloorType.Nocol8;
-        block.Ceiling += (short)maxCorner;
+        block.Ceiling -= (short)maxCorner;
         if (fd.Tipo is FloorType.Nocol5 or FloorType.Nocol7) block.Flags2 |= 0x10;
         if (fd.Tipo is FloorType.Nocol6 or FloorType.Nocol8) block.Flags2 |= 0x8;
         if (fd.Tipo is >= FloorType.Nocol5 and <= FloorType.Nocol8)
