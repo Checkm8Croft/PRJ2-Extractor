@@ -772,13 +772,15 @@ public class TrLevel : IDisposable
 
     private static void ApplyFloorSplit(Block block, ParsedFloorData fd)
     {
-        block.FloorCorner[0] = (sbyte)fd.Corners[0];
-        block.FloorCorner[1] = (sbyte)fd.Corners[1];
-        block.FloorCorner[2] = (sbyte)fd.Corners[2];
-        block.FloorCorner[3] = (sbyte)fd.Corners[3];
+        // Triangulation formula per TRosettaStone: H = Hfloor + (max(dC) - dCn). fd.Corners parsing
+        // order already matches FloorCorner's index convention 1:1 ([0]=XpZn,[1]=XnZn,[2]=XnZp,[3]=XpZp).
+        // block.Floor is NOT lowered: it already represents Hfloor directly, like the fixed ceiling case.
         int[] a = { fd.Corners[0], fd.Corners[1], fd.Corners[2], fd.Corners[3] };
         int maxCorner = a.Max();
-        block.Floor -= (short)maxCorner;
+        block.FloorCorner[0] = (sbyte)(maxCorner - a[0]);
+        block.FloorCorner[1] = (sbyte)(maxCorner - a[1]);
+        block.FloorCorner[2] = (sbyte)(maxCorner - a[2]);
+        block.FloorCorner[3] = (sbyte)(maxCorner - a[3]);
         // Split1(0x07)/Nocol1(0x0B)/Nocol2(0x0C): NW-SE diagonal (XnZp-XpZn) -> SplitDirectionIsXEqualsZ=false.
         // Split2(0x08)/Nocol3(0x0D)/Nocol4(0x0E): NE-SW diagonal (XnZn-XpZp) -> SplitDirectionIsXEqualsZ=true.
         block.FloorSplitXEqualsZ = fd.Tipo is FloorType.Split2 or FloorType.Nocol3 or FloorType.Nocol4;

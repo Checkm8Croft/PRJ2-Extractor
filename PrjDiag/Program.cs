@@ -14,6 +14,7 @@ try
     var info = new FileInfo(prj2Path);
     Console.WriteLine($"PRJ2 export OK -> {prj2Path} ({info.Length} bytes)");
     Console.WriteLine($"Portal warnings: {warnings.Count}");
+    foreach (var w in warnings.Take(20)) Console.WriteLine("  " + w);
 }
 catch (Exception ex)
 {

@@ -191,6 +191,12 @@ public static class Prj2Exporter
 
             foreach (var (key, rect) in groups)
             {
+                // TombLib's Room.AddObject auto-creates the mirrored portal in the adjoining room, so
+                // adding it again from that room's own (independent, TR4-sourced) door list would
+                // always conflict with the auto-created copy. Process each room pair once, from the
+                // lower-indexed room only; this was the dominant cause of "Portal overlaps another".
+                if (key.Target < i) continue;
+
                 var adjoiningRoom = tombRooms[key.Target]!;
                 var area = new RectangleInt2(rect.X0, rect.Z0, rect.X1, rect.Z1);
                 var portal = new PortalInstance(area, key.Direction, adjoiningRoom);
