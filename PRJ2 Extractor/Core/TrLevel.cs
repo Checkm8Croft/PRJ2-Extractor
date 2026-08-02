@@ -884,11 +884,11 @@ public class TrLevel : IDisposable
                 p.Rooms[i].DoorThingIndex[j] = (ushort)doorCount;
 
                 if (portal.Normal.X == 1)
-                { d.Id = 2; d.ZPos = 0; d.ZSize = 1; d.XPos = (short)(minz / 1024); d.XSize = (short)((maxz - minz) / 1024); }
+                { d.Id = 2; d.ZPos = (short)(minx / 1024); d.ZSize = 1; d.XPos = (short)(minz / 1024); d.XSize = (short)((maxz - minz) / 1024); }
                 if (portal.Normal.X == -1)
                 { d.Id = 0xFFFD; d.ZPos = (short)(minx / 1024); d.ZSize = 1; d.XPos = (short)(minz / 1024); d.XSize = (short)((maxz - minz) / 1024); }
                 if (portal.Normal.Z == 1)
-                { d.Id = 1; d.XPos = 0; d.XSize = 1; d.ZPos = (short)(minx / 1024); d.ZSize = (short)((maxx - minx) / 1024); }
+                { d.Id = 1; d.XPos = (short)(minz / 1024); d.XSize = 1; d.ZPos = (short)(minx / 1024); d.ZSize = (short)((maxx - minx) / 1024); }
                 if (portal.Normal.Z == -1)
                 { d.Id = 0xFFFE; d.XPos = (short)(minz / 1024); d.XSize = 1; d.ZPos = (short)(minx / 1024); d.ZSize = (short)((maxx - minx) / 1024); }
                 if (portal.Normal.Y == -1)
