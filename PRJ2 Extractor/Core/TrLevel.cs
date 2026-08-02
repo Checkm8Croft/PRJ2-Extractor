@@ -808,15 +808,19 @@ public class TrLevel : IDisposable
 
     private static void ApplyCeilingSplit(Block block, ParsedFloorData fd)
     {
-        block.CeilCorner[0] = (sbyte)fd.Corners[0];
-        block.CeilCorner[1] = (sbyte)fd.Corners[1];
-        block.CeilCorner[2] = (sbyte)fd.Corners[2];
-        block.CeilCorner[3] = (sbyte)fd.Corners[3];
+        // Triangulation formula per TRosettaStone (mirrors ApplyFloorSplit's verified
+        // H = Hbase + (max(dC) - dCn) formula by corner NAME, since the two arrays use different
+        // index conventions: fd.Corners is [0]=XpZn(10) [1]=XnZn(00) [2]=XnZp(01) [3]=XpZp(11);
+        // CeilCorner is [0]=XpZp [1]=XnZp [2]=XnZn [3]=XpZn. block.Ceiling is NOT adjusted: it
+        // already represents the reference height directly, like block.Floor.
         int maxCorner = fd.Corners.Max();
+        block.CeilCorner[3] = (sbyte)(maxCorner - fd.Corners[0]); // XpZn
+        block.CeilCorner[2] = (sbyte)(maxCorner - fd.Corners[1]); // XnZn
+        block.CeilCorner[1] = (sbyte)(maxCorner - fd.Corners[2]); // XnZp
+        block.CeilCorner[0] = (sbyte)(maxCorner - fd.Corners[3]); // XpZp
         // Split3(0x09)/Nocol5(0x0F)/Nocol6(0x10): "NW" ceiling diagonal -> SplitDirectionIsXEqualsZ=false.
         // Split4(0x0A)/Nocol7(0x11)/Nocol8(0x12): "NE" ceiling diagonal -> SplitDirectionIsXEqualsZ=true.
         block.CeilingSplitXEqualsZ = fd.Tipo is FloorType.Split4 or FloorType.Nocol7 or FloorType.Nocol8;
-        block.Ceiling -= (short)maxCorner;
         if (fd.Tipo is FloorType.Nocol5 or FloorType.Nocol7) block.Flags2 |= 0x10;
         if (fd.Tipo is FloorType.Nocol6 or FloorType.Nocol8) block.Flags2 |= 0x8;
         if (fd.Tipo is >= FloorType.Nocol5 and <= FloorType.Nocol8)
