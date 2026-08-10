@@ -55,12 +55,17 @@ public static class Prj2Exporter
             if (string.IsNullOrWhiteSpace(roomName)) roomName = $"Room{i}";
 
             var room = new Room(level, pr.XSize, pr.ZSize, Vector3.One, roomName);
-            room.Position = new VectorInt3(pr.XPos, pr.YBottom, pr.ZPos);
+            // Position.X/Z are sector-grid units (matching XSize/ZSize), but Position.Y must be
+            // world units, not clicks (verified: TombLib's Room.Position.Y is compared directly
+            // against Prj2Loader-reconstructed sector heights, which are in world units).
+            room.Position = new VectorInt3(pr.XPos, Clicks.ToWorld(pr.YBottom), pr.ZPos);
 
             for (int z = 0; z < pr.ZSize; z++)
             for (int x = 0; x < pr.XSize; x++)
             {
-                int b = z * pr.XSize + x;
+                // pr.Blocks[] is X-major (TrLevel.cs: b = X_idx*ZSize + Z_idx), matching the
+                // TRosettaStone file order. Index accordingly (not z*XSize+x).
+                int b = x * pr.ZSize + z;
                 var block = pr.Blocks[b];
                 var sector = room.Sectors[x, z];
 
@@ -76,19 +81,23 @@ public static class Prj2Exporter
                 {
                     // Base height + per-corner delta (in clicks) -> world units.
                     // Corner order follows the classic PRJ on-disk layout used by TombLib's PrjLoader:
-                    // floor corners are [XpZn, XnZn, XnZp, XpZp].
-                    sector.Floor.XpZn = (short)Clicks.ToWorld(block.FloorCorner[3] + block.Floor);
-                    sector.Floor.XnZn = (short)Clicks.ToWorld(block.FloorCorner[2] + block.Floor);
-                    sector.Floor.XnZp = (short)Clicks.ToWorld(block.FloorCorner[1] + block.Floor);
-                    sector.Floor.XpZp = (short)Clicks.ToWorld(block.FloorCorner[0] + block.Floor);
+                    // Absolute world height = -RoomYBottom + base + corner delta (verified against
+                    // TombLib's own compiler, Compilers/Rooms.cs: compiledSector.Floor/Ceiling formula).
+                    // floor corners are [XpZn, XnZn, XnZp, XpZp]; ceiling delta is ADDED, floor delta SUBTRACTED.
+                    int floorBase = -pr.YBottom + block.Floor;
+                    sector.Floor.XpZn = (short)Clicks.ToWorld(floorBase - block.FloorCorner[0]);
+                    sector.Floor.XnZn = (short)Clicks.ToWorld(floorBase - block.FloorCorner[1]);
+                    sector.Floor.XnZp = (short)Clicks.ToWorld(floorBase - block.FloorCorner[2]);
+                    sector.Floor.XpZp = (short)Clicks.ToWorld(floorBase - block.FloorCorner[3]);
 
                     // NOTE (interpretazione, verificata contro l'ordine di lettura in PrjLoader.cs):
                     // nel formato PRJ classico l'ordine degli angoli del soffitto è invertito
                     // rispetto al pavimento: [XpZp, XnZp, XnZn, XpZn].
-                    sector.Ceiling.XpZp = (short)Clicks.ToWorld(block.CeilCorner[0] + block.Ceiling);
-                    sector.Ceiling.XnZp = (short)Clicks.ToWorld(block.CeilCorner[1] + block.Ceiling);
-                    sector.Ceiling.XnZn = (short)Clicks.ToWorld(block.CeilCorner[2] + block.Ceiling);
-                    sector.Ceiling.XpZn = (short)Clicks.ToWorld(block.CeilCorner[3] + block.Ceiling);
+                    int ceilBase = -pr.YBottom + block.Ceiling;
+                    sector.Ceiling.XpZp = (short)Clicks.ToWorld(ceilBase + block.CeilCorner[0]);
+                    sector.Ceiling.XnZp = (short)Clicks.ToWorld(ceilBase + block.CeilCorner[1]);
+                    sector.Ceiling.XnZn = (short)Clicks.ToWorld(ceilBase + block.CeilCorner[2]);
+                    sector.Ceiling.XpZn = (short)Clicks.ToWorld(ceilBase + block.CeilCorner[3]);
 
                     // Diagonal-split triangulation (TR FloorData functions 0x07-0x12). TombLib's
                     // SectorSurface.SplitDirectionIsXEqualsZ (NOT the DiagonalSplit enum, which is
@@ -111,8 +120,8 @@ public static class Prj2Exporter
                     // value but Floor/FloorCorner are not), which can encode near-vertical fake slopes.
                     // Since these sectors have no floor/ceiling collision semantics, use flat heights
                     // instead of the per-corner deltas to avoid feeding TombLib invalid steep geometry.
-                    short flatFloor = (short)Clicks.ToWorld(block.Floor);
-                    short flatCeiling = (short)Clicks.ToWorld(block.Ceiling);
+                    short flatFloor = (short)Clicks.ToWorld(-pr.YBottom + block.Floor);
+                    short flatCeiling = (short)Clicks.ToWorld(-pr.YBottom + block.Ceiling);
                     sector.Floor.XpZn = sector.Floor.XnZn = sector.Floor.XnZp = sector.Floor.XpZp = flatFloor;
                     sector.Ceiling.XpZp = sector.Ceiling.XnZp = sector.Ceiling.XnZn = sector.Ceiling.XpZn = flatCeiling;
                 }
