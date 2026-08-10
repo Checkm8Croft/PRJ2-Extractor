@@ -221,8 +221,9 @@ public class TrLevel : IDisposable
                 progress?.Report(Math.Min(99, (int)(memfile.Position * 100 / fileSize) + 1));
                 var r = new LevelRoom
                 {
-                    Z = br2.ReadInt32(),
+                    // TRosettaStone tr4_room_info: file order is X, Z, YBottom, YTop.
                     X = br2.ReadInt32(),
+                    Z = br2.ReadInt32(),
                     YBottom = br2.ReadInt32(),
                     YTop = br2.ReadInt32()
                 };
@@ -234,8 +235,11 @@ public class TrLevel : IDisposable
                 r.Portals = new Portal[r.NumPortals];
                 for (int j = 0; j < r.NumPortals; j++)
                     r.Portals[j] = ReadPortal(br2);
-                r.NumX = br2.ReadUInt16();
+                // Per TRosettaStone (tr_room struct): the file stores NumZsectors FIRST,
+                // then NumXsectors SECOND. Read order matches that here; the sector-copy
+                // loop below is X-major (idx = X_idx*NumZ + Z_idx) to match spec ordering.
                 r.NumZ = br2.ReadUInt16();
+                r.NumX = br2.ReadUInt16();
                 r.Sectors = new LevelSector[r.NumX * r.NumZ];
                 for (int j = 0; j < r.NumX * r.NumZ; j++)
                 {
@@ -494,10 +498,12 @@ public class TrLevel : IDisposable
             p.Rooms[i].YTop = -r1.YTop / 256;
             p.Rooms[i].Blocks = new Block[r1.NumZ * r1.NumX];
 
-            for (int j = 0; j < r1.NumZ; j++)
-            for (int k = 0; k < r1.NumX; k++)
+            // Sectors[] are stored in the file in X-major order (idx = X_idx*NumZ + Z_idx,
+            // per TRosettaStone). j = X_idx, k = Z_idx here to read them back correctly.
+            for (int j = 0; j < r1.NumX; j++)
+            for (int k = 0; k < r1.NumZ; k++)
             {
-                int b = j * r1.NumX + k;
+                int b = j * r1.NumZ + k;
                 var sector = r1.Sectors[b];
                 p.Rooms[i].Blocks[b] = new Block();
                 var block = p.Rooms[i].Blocks[b];
@@ -516,12 +522,12 @@ public class TrLevel : IDisposable
                     for (int ii = 0; ii < 4; ii++) block.CDiv[ii] = (sbyte)Math.Abs(temp);
                 }
 
-                if ((k == 0 && j == 0) || (k == r1.NumX - 1 && j == 0) ||
-                    (k == 0 && j == r1.NumZ - 1) || (k == r1.NumX - 1 && j == r1.NumZ - 1))
+                if ((k == 0 && j == 0) || (k == r1.NumZ - 1 && j == 0) ||
+                    (k == 0 && j == r1.NumX - 1) || (k == r1.NumZ - 1 && j == r1.NumX - 1))
                 {
                     block.Id = 0x1E; block.Floor = 0; block.Ceiling = 20;
                 }
-                else if (j == 0 || j == r1.NumZ - 1 || k == 0 || k == r1.NumX - 1)
+                else if (j == 0 || j == r1.NumX - 1 || k == 0 || k == r1.NumZ - 1)
                 {
                     block.Id = 0x1E;
                     block.Floor = (short)(-r1.YBottom / 256);
@@ -721,11 +727,17 @@ public class TrLevel : IDisposable
 
         if (fd.Tipo == FloorType.Tilt)
         {
-            if (fd.AddX >= 0) { block.FloorCorner[2] = fd.AddX; block.FloorCorner[3] = fd.AddX; }
-            else { block.FloorCorner[0] = (sbyte)-fd.AddX; block.FloorCorner[1] = (sbyte)-fd.AddX; }
-            if (fd.AddZ >= 0) { block.FloorCorner[0] += fd.AddZ; block.FloorCorner[3] += fd.AddZ; }
-            else { block.FloorCorner[2] += (sbyte)Math.Abs(fd.AddZ); block.FloorCorner[1] += (sbyte)Math.Abs(fd.AddZ); }
-            block.Floor -= (short)(Math.Abs(fd.AddX) + Math.Abs(fd.AddZ));
+            // Function 0x02 (Floor Slant), per TRosettaStone, verified against TombLib's compiler
+            // (Compilers/FloorData.cs quad-slope branch): relative to XnZn=0, XpZn=AddZ, XnZp=AddX,
+            // XpZp=AddX+AddZ. FloorCorner convention (verified against the triangulation path) is
+            // max-relative: FloorCorner[i] = max(rel) - rel[i], always >= 0.
+            // Block.FloorCorner index mapping: [0]=XpZn [1]=XnZn [2]=XnZp [3]=XpZp.
+            int relXnZn = 0, relXpZn = fd.AddZ, relXnZp = fd.AddX, relXpZp = fd.AddX + fd.AddZ;
+            int maxRel = Math.Max(Math.Max(relXnZn, relXpZn), Math.Max(relXnZp, relXpZp));
+            block.FloorCorner[0] = (sbyte)(maxRel - relXpZn);
+            block.FloorCorner[1] = (sbyte)(maxRel - relXnZn);
+            block.FloorCorner[2] = (sbyte)(maxRel - relXnZp);
+            block.FloorCorner[3] = (sbyte)(maxRel - relXpZp);
             if (fixFdivs)
             {
                 int v = -Math.Abs(block.Floor - (-r1.YBottom / 256));
@@ -736,11 +748,17 @@ public class TrLevel : IDisposable
 
         if (fd.Tipo == FloorType.Roof)
         {
-            if (fd.AddX >= 0) { block.CeilCorner[0] = (sbyte)-fd.AddX; block.CeilCorner[1] = (sbyte)-fd.AddX; }
-            else { block.CeilCorner[2] = fd.AddX; block.CeilCorner[3] = fd.AddX; }
-            if (fd.AddZ >= 0) { block.CeilCorner[1] -= fd.AddZ; block.CeilCorner[2] -= fd.AddZ; }
-            else { block.CeilCorner[0] += fd.AddZ; block.CeilCorner[3] += fd.AddZ; }
-            block.Ceiling += (short)(Math.Abs(fd.AddX) + Math.Abs(fd.AddZ));
+            // Function 0x03 (Ceiling Slant), per TRosettaStone, verified against TombLib's compiler:
+            // relative to XnZn=0, XpZn=AddZ, XnZp=-AddX, XpZp=AddZ-AddX (X-difference sign flips for
+            // ceiling vs floor). CeilCorner convention (verified against the triangulation path) is
+            // min-relative: CeilCorner[i] = rel[i] - min(rel), always >= 0.
+            // Block.CeilCorner index mapping: [0]=XpZp [1]=XnZp [2]=XnZn [3]=XpZn.
+            int relXnZn = 0, relXpZn = fd.AddZ, relXnZp = -fd.AddX, relXpZp = fd.AddZ - fd.AddX;
+            int minRel = Math.Min(Math.Min(relXnZn, relXpZn), Math.Min(relXnZp, relXpZp));
+            block.CeilCorner[0] = (sbyte)(relXpZp - minRel);
+            block.CeilCorner[1] = (sbyte)(relXnZp - minRel);
+            block.CeilCorner[2] = (sbyte)(relXnZn - minRel);
+            block.CeilCorner[3] = (sbyte)(relXpZn - minRel);
             if (fixFdivs)
             {
                 int v = Math.Abs((-r1.YTop / 256) - block.Ceiling);
@@ -763,13 +781,18 @@ public class TrLevel : IDisposable
 
     private static void ApplyFloorSplit(Block block, ParsedFloorData fd)
     {
-        block.FloorCorner[0] = (sbyte)fd.Corners[0];
-        block.FloorCorner[1] = (sbyte)fd.Corners[1];
-        block.FloorCorner[2] = (sbyte)fd.Corners[2];
-        block.FloorCorner[3] = (sbyte)fd.Corners[3];
+        // Triangulation formula per TRosettaStone: H = Hfloor + (max(dC) - dCn). fd.Corners parsing
+        // order already matches FloorCorner's index convention 1:1 ([0]=XpZn,[1]=XnZn,[2]=XnZp,[3]=XpZp).
+        // block.Floor is NOT lowered: it already represents Hfloor directly, like the fixed ceiling case.
         int[] a = { fd.Corners[0], fd.Corners[1], fd.Corners[2], fd.Corners[3] };
         int maxCorner = a.Max();
-        block.Floor -= (short)maxCorner;
+        block.FloorCorner[0] = (sbyte)(maxCorner - a[0]);
+        block.FloorCorner[1] = (sbyte)(maxCorner - a[1]);
+        block.FloorCorner[2] = (sbyte)(maxCorner - a[2]);
+        block.FloorCorner[3] = (sbyte)(maxCorner - a[3]);
+        // Split1(0x07)/Nocol1(0x0B)/Nocol2(0x0C): NW-SE diagonal (XnZp-XpZn) -> SplitDirectionIsXEqualsZ=false.
+        // Split2(0x08)/Nocol3(0x0D)/Nocol4(0x0E): NE-SW diagonal (XnZn-XpZp) -> SplitDirectionIsXEqualsZ=true.
+        block.FloorSplitXEqualsZ = fd.Tipo is FloorType.Split2 or FloorType.Nocol3 or FloorType.Nocol4;
 
         if (fd.Tipo is FloorType.Split2 or FloorType.Nocol3 or FloorType.Nocol4)
         {
@@ -796,12 +819,22 @@ public class TrLevel : IDisposable
 
     private static void ApplyCeilingSplit(Block block, ParsedFloorData fd)
     {
-        block.CeilCorner[0] = (sbyte)-fd.Corners[0];
-        block.CeilCorner[1] = (sbyte)-fd.Corners[1];
-        block.CeilCorner[2] = (sbyte)-fd.Corners[2];
-        block.CeilCorner[3] = (sbyte)-fd.Corners[3];
+        // Triangulation formula per TRosettaStone: H = Hbase + (max(dC) - dCn). Verified against
+        // trview's parse_triangulation/Sector.cpp: for the ceiling, the SAME raw c00/c01/c10/c11
+        // bit fields (same fd.Corners[] parse as floor) map to corners with Z MIRRORED but X
+        // unchanged relative to the floor interpretation -- i.e. fd.Corners[i] keeps the same
+        // index but means a different corner: [0]=XpZp(NE) [1]=XnZp(NW) [2]=XnZn(SW) [3]=XpZn(SE).
+        // CeilCorner's own target order is [0]=XpZp [1]=XnZp [2]=XnZn [3]=XpZn -- so, unlike a
+        // naive full reversal, this is actually a direct 1:1 index mapping, not reversed.
+        // block.Ceiling is NOT adjusted: it already represents the reference height directly.
         int maxCorner = fd.Corners.Max();
-        block.Ceiling += (short)maxCorner;
+        block.CeilCorner[0] = (sbyte)(maxCorner - fd.Corners[0]); // XpZp
+        block.CeilCorner[1] = (sbyte)(maxCorner - fd.Corners[1]); // XnZp
+        block.CeilCorner[2] = (sbyte)(maxCorner - fd.Corners[2]); // XnZn
+        block.CeilCorner[3] = (sbyte)(maxCorner - fd.Corners[3]); // XpZn
+        // Split3(0x09)/Nocol5(0x0F)/Nocol6(0x10): "NW" ceiling diagonal -> SplitDirectionIsXEqualsZ=false.
+        // Split4(0x0A)/Nocol7(0x11)/Nocol8(0x12): "NE" ceiling diagonal -> SplitDirectionIsXEqualsZ=true.
+        block.CeilingSplitXEqualsZ = fd.Tipo is FloorType.Split4 or FloorType.Nocol7 or FloorType.Nocol8;
         if (fd.Tipo is FloorType.Nocol5 or FloorType.Nocol7) block.Flags2 |= 0x10;
         if (fd.Tipo is FloorType.Nocol6 or FloorType.Nocol8) block.Flags2 |= 0x8;
         if (fd.Tipo is >= FloorType.Nocol5 and <= FloorType.Nocol8)
@@ -862,18 +895,25 @@ public class TrLevel : IDisposable
                 d.Filler[0] = portal.ToRoom;
                 p.Rooms[i].DoorThingIndex[j] = (ushort)doorCount;
 
+                // NOTE: door.XPos/XSize always come from the portal's X-vertex extent (minx/maxx),
+                // and door.ZPos/ZSize always come from its Z-vertex extent (minz/maxz), for every
+                // direction including walls. Prj2Exporter builds a RectangleInt2(x0,z0,x1,z1) directly
+                // from these fields with no per-direction rotation, matching TombLib's own PrjLoader
+                // (GetArea is called identically regardless of portal direction). The previous code
+                // crossed the axes for all 6 directions (X-derived data stored in the Z field and vice
+                // versa), which would rotate every portal's rectangle 90 degrees from where it belongs.
                 if (portal.Normal.X == 1)
-                { d.Id = 2; d.ZPos = 0; d.ZSize = 1; d.XPos = (short)(minz / 1024); d.XSize = (short)((maxz - minz) / 1024); }
+                { d.Id = 2; d.XPos = (short)(minx / 1024); d.XSize = 1; d.ZPos = (short)(minz / 1024); d.ZSize = (short)((maxz - minz) / 1024); }
                 if (portal.Normal.X == -1)
-                { d.Id = 0xFFFD; d.ZPos = (short)(minx / 1024); d.ZSize = 1; d.XPos = (short)(minz / 1024); d.XSize = (short)((maxz - minz) / 1024); }
+                { d.Id = 0xFFFD; d.XPos = (short)(minx / 1024); d.XSize = 1; d.ZPos = (short)(minz / 1024); d.ZSize = (short)((maxz - minz) / 1024); }
                 if (portal.Normal.Z == 1)
-                { d.Id = 1; d.XPos = 0; d.XSize = 1; d.ZPos = (short)(minx / 1024); d.ZSize = (short)((maxx - minx) / 1024); }
+                { d.Id = 1; d.ZPos = (short)(minz / 1024); d.ZSize = 1; d.XPos = (short)(minx / 1024); d.XSize = (short)((maxx - minx) / 1024); }
                 if (portal.Normal.Z == -1)
-                { d.Id = 0xFFFE; d.XPos = (short)(minz / 1024); d.XSize = 1; d.ZPos = (short)(minx / 1024); d.ZSize = (short)((maxx - minx) / 1024); }
+                { d.Id = 0xFFFE; d.ZPos = (short)(minz / 1024); d.ZSize = 1; d.XPos = (short)(minx / 1024); d.XSize = (short)((maxx - minx) / 1024); }
                 if (portal.Normal.Y == -1)
-                { d.Id = 4; d.XPos = (short)(minz / 1024); d.XSize = (short)((maxz - minz) / 1024); d.ZPos = (short)(minx / 1024); d.ZSize = (short)((maxx - minx) / 1024); }
+                { d.Id = 4; d.XPos = (short)(minx / 1024); d.XSize = (short)((maxx - minx) / 1024); d.ZPos = (short)(minz / 1024); d.ZSize = (short)((maxz - minz) / 1024); }
                 if (portal.Normal.Y == 1)
-                { d.Id = 0xFFFB; d.XPos = (short)(minz / 1024); d.XSize = (short)((maxz - minz) / 1024); d.ZPos = (short)(minx / 1024); d.ZSize = (short)((maxx - minx) / 1024); }
+                { d.Id = 0xFFFB; d.XPos = (short)(minx / 1024); d.XSize = (short)((maxx - minx) / 1024); d.ZPos = (short)(minz / 1024); d.ZSize = (short)((maxz - minz) / 1024); }
 
                 if (!r.IsFlipRoom) doorCount++;
                 p.Rooms[i].Doors[j] = d;
@@ -917,7 +957,7 @@ public class TrLevel : IDisposable
             {
                 var d = p.Rooms[i].Doors[j];
                 if (d.Id is 4 or 0xFFFB) continue;
-                var bloks = d.GetBlockIndices(p.Rooms[i].XSize);
+                var bloks = d.GetBlockIndices(p.Rooms[i].ZSize);
                 Door? dd = null;
                 for (int k = 0; k < p.Rooms[d.Filler[0]].Doors.Length; k++)
                 {
@@ -925,12 +965,14 @@ public class TrLevel : IDisposable
                     { dd = p.Rooms[d.Filler[0]].Doors[k]; break; }
                 }
                 if (dd == null) continue;
-                var bloks2 = dd.GetAdjacentBlockIndices(p.Rooms[dd.Room].XSize);
+                var bloks2 = dd.GetAdjacentBlockIndices(p.Rooms[dd.Room].ZSize);
                 if (bloks.Length != bloks2.Length) continue;
                 int rm = p.Rooms[i].IsFlipRoom && p.Rooms[dd.Room].FlipRoom > -1
                     ? p.Rooms[dd.Room].FlipRoom : dd.Room;
                 for (int k = 0; k < bloks.Length; k++)
                 {
+                    if (bloks[k] >= p.Rooms[i].Blocks.Length || bloks2[k] >= p.Rooms[rm].Blocks.Length)
+                        continue; // out-of-range door geometry (bad/edge-case source data); skip rather than crash
                     p.Rooms[i].Blocks[bloks[k]].Floor = p.Rooms[rm].Blocks[bloks2[k]].Floor;
                     p.Rooms[i].Blocks[bloks[k]].Ceiling = p.Rooms[rm].Blocks[bloks2[k]].Ceiling;
                 }

@@ -578,7 +578,7 @@ public class TrProject : IDisposable
                 for (int z = 0; z < rm.ZSize; z++)
                 for (int x = 0; x < rm.XSize; x++)
                 {
-                    int b = (z * rm.XSize) + x;
+                    int b = (x * rm.ZSize) + z;
                     if (rm.Blocks[b].Floor >= rm.Blocks[b].Ceiling)
                     {
                         var s = $"Room {r,3} Block {x + 1,3}, {z + 1,3} :: f {rm.Blocks[b].Floor,3} c {rm.Blocks[b].Ceiling,3}";

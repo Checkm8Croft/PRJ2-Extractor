@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PrjDiag/bin/Debug/net10.0-windows/PrjDiag.exe)",
+      "Bash('Lets fix the path. *)",
+      "Bash(start PrjDiag/bin/Debug/net10.0-windows/PrjDiag.exe)",
+      "Bash(ls -la \"/c/Users/Checkm8ra1n/Documents/alexhub2.prj2\")",
+      "Read(//c/Users/Checkm8ra1n/Documents/**)"
+    ]
+  }
+}

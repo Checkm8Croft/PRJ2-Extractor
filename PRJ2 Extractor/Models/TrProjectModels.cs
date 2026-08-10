@@ -66,6 +66,14 @@ public class Block
     public BlockTex[] Textures = Enumerable.Range(0, 14).Select(_ => new BlockTex()).ToArray();
     public ushort Flags2, Flags3;
 
+    // Diagonal-split triangulation (TR3+ FloorData functions 0x07-0x12), used to build
+    // TombLib's Sector.Floor/Ceiling.DiagonalSplit -- NOT related to FDiv/CDiv above, which
+    // encode an unrelated classic-PRJ/NGLE "extra floor level" feature.
+    // FloorSplit/CeilingSplit: null = no triangulation (single plane / Tilt / flat).
+    // true = diagonal runs XnZn-XpZp ("NE-SW"), false = diagonal runs XnZp-XpZn ("NW-SE").
+    public bool? FloorSplitXEqualsZ;
+    public bool? CeilingSplitXEqualsZ;
+
     public bool HasCornerDataFloor =>
         FloorCorner.Any(c => c != 0);
 
@@ -134,67 +142,42 @@ public static class DoorExtensions
         self.ZSize == other.ZSize &&
         self.Room == other.Filler[0];
 
-    public static ushort[] GetBlockIndices(this Door self, int roomX)
+    public static ushort[] GetBlockIndices(this Door self, int roomZ)
     {
-        if (self.Id == 1)
-        {
-            var result = new ushort[self.ZSize];
-            for (int i = 0; i < result.Length; i++)
-                result[i] = (ushort)((self.ZPos * roomX) + (i * roomX));
-            return result;
-        }
-        if (self.Id == 0xFFFE)
-        {
-            var result = new ushort[self.ZSize];
-            for (int i = 0; i < result.Length; i++)
-                result[i] = (ushort)(((self.ZPos + 1) * roomX - 1) + (i * roomX));
-            return result;
-        }
-        if (self.Id == 2)
-        {
-            var result = new ushort[self.XSize];
-            for (int i = 0; i < result.Length; i++)
-                result[i] = (ushort)(self.XPos + i);
-            return result;
-        }
-        if (self.Id == 0xFFFD)
-        {
-            var result = new ushort[self.XSize];
-            for (int i = 0; i < result.Length; i++)
-                result[i] = (ushort)((roomX * self.ZPos) + self.XPos + i);
-            return result;
-        }
-        if (self.Id == 4 || self.Id == 0xFFFB)
-        {
-            var result = new ushort[self.XSize * self.ZSize];
-            for (int y = 0; y < self.ZSize; y++)
-            for (int x = 0; x < self.XSize; x++)
-            {
-                int i = x + self.XSize * y;
-                result[i] = (ushort)((roomX * self.ZPos) + self.XPos + (roomX * y + x));
-            }
-            return result;
-        }
-        return [];
+        // Blocks[] is populated X-major (TrLevel.cs): b = X_idx*NumZ + Z_idx, i.e. Z is the
+        // fast/inner axis, and moving one step along X jumps by NumZ (=room.ZSize, passed here
+        // as roomZ). XPos/XSize is the X-column range, ZPos/ZSize is the Z-row range.
+        // For wall doors either XSize or ZSize is 1, so this degenerates correctly to a single
+        // line of blocks along the wall.
+        var result = new ushort[self.XSize * self.ZSize];
+        for (int y = 0; y < self.ZSize; y++)
+        for (int x = 0; x < self.XSize; x++)
+            result[x + self.XSize * y] = (ushort)((self.XPos + x) * roomZ + (self.ZPos + y));
+        return result;
     }
 
-    public static ushort[] GetAdjacentBlockIndices(this Door self, int roomX)
+    public static ushort[] GetAdjacentBlockIndices(this Door self, int roomZ)
     {
-        var result = self.GetBlockIndices(roomX);
+        // The "adjacent" block is one step further in the direction the portal's normal points.
+        // In the X-major Blocks[] layout (b = X_idx*NumZ + Z_idx), Z is the fast axis (step=1)
+        // and X is the slow axis (step=roomZ):
+        // Id 1 (Normal.Z==1) -> +Z (+1); Id 0xFFFE (Normal.Z==-1) -> -Z (-1);
+        // Id 2 (Normal.X==1) -> +X (+roomZ); Id 0xFFFD (Normal.X==-1) -> -X (-roomZ).
+        var result = self.GetBlockIndices(roomZ);
         if (self.Id == 1)
             for (int i = 0; i < result.Length; i++) result[i]++;
         if (self.Id == 0xFFFE)
             for (int i = 0; i < result.Length; i++) result[i]--;
         if (self.Id == 2)
-            for (int i = 0; i < result.Length; i++) result[i] = (ushort)(result[i] + roomX);
+            for (int i = 0; i < result.Length; i++) result[i] = (ushort)(result[i] + roomZ);
         if (self.Id == 0xFFFD)
-            for (int i = 0; i < result.Length; i++) result[i] = (ushort)(result[i] - roomX);
+            for (int i = 0; i < result.Length; i++) result[i] = (ushort)(result[i] - roomZ);
         return result;
     }
 
     public static void MarkDoorBlocks(this Door self, PrjRoom room)
     {
-        var bloks = self.GetBlockIndices(room.XSize);
+        var bloks = self.GetBlockIndices(room.ZSize).Where(b => b < room.Blocks.Length).ToArray();
         if (self.Id == 4 || self.Id == 0xFFFB)
         {
             foreach (var b in bloks)
