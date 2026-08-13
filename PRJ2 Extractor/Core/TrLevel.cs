@@ -22,6 +22,11 @@ public class TrLevel : IDisposable
     public uint NumMeshtrees, SizeKeyframes, NumMoveables, NumStatics;
     public uint NumFloorData;
     public uint NumBoxes;
+    public List<LevelSoundSource> SoundSources = [];
+    public List<LevelCamera> Cameras = [];
+    public List<LevelFlybyCamera> FlybyCameras = [];
+    public HashSet<int> CameraFloorDataIndices = [];
+    public HashSet<int> SinkFloorDataIndices = [];
     public ushort[] FloorData = [];
     public LevelRoom[] Rooms = [];
     public LevelBox[] Boxes = [];
@@ -69,10 +74,30 @@ public class TrLevel : IDisposable
             }
             else if (fd.Tipo == FloorType.Trigger)
             {
+                bool isFirst = true;
                 do
                 {
                     data = FloorData[fdIndex + k];
                     k++;
+                    if (isFirst) { isFirst = false; continue; } // TriggerSetup word, not an ActionList entry
+
+                    int trigAction = (data & 0x7C00) >> 10;
+                    int parameter = data & 0x03FF;
+                    if (trigAction == 0x01) // Camera: uses Parameter as Cameras[] index, plus one extra word
+                    {
+                        CameraFloorDataIndices.Add(parameter & 0x7F);
+                        data = FloorData[fdIndex + k]; // the end/cont bit for 2-word actions lives here, not on the entry word above
+                        k++;
+                    }
+                    else if (trigAction == 0x02) // Underwater Current (Sink): Parameter is Cameras[] index
+                    {
+                        SinkFloorDataIndices.Add(parameter);
+                    }
+                    else if (trigAction == 0x0C) // Flyby: also has one extra word
+                    {
+                        data = FloorData[fdIndex + k];
+                        k++;
+                    }
                 } while ((data & 0x8000) != 0x8000);
             }
             else if (fd.Tipo == FloorType.Climb)
@@ -251,7 +276,8 @@ public class TrLevel : IDisposable
                 r.Colour.R = br2.ReadByte();
                 r.Colour.A = br2.ReadByte();
                 ushort lightCount = br2.ReadUInt16();
-                geometry.Seek(lightCount * 46, SeekOrigin.Current);
+                for (int li = 0; li < lightCount; li++)
+                    r.Lights.Add(ReadLight(br2));
                 ushort staticCount = br2.ReadUInt16();
                 geometry.Seek(staticCount * 20, SeekOrigin.Current);
                 r.AltRoom = br2.ReadInt16();
@@ -305,11 +331,47 @@ public class TrLevel : IDisposable
             size = br2.ReadUInt32();
             geometry.Seek(size * 8, SeekOrigin.Current);
             size = br2.ReadUInt32();
-            geometry.Seek(size * 16, SeekOrigin.Current);
+            Cameras = new List<LevelCamera>((int)size);
+            for (int i = 0; i < size; i++)
+                Cameras.Add(new LevelCamera
+                {
+                    X = br2.ReadInt32(),
+                    Y = br2.ReadInt32(),
+                    Z = br2.ReadInt32(),
+                    Room = br2.ReadInt16(),
+                    Flags = br2.ReadUInt16(),
+                });
             size = br2.ReadUInt32();
-            geometry.Seek(size * 40, SeekOrigin.Current);
+            FlybyCameras = new List<LevelFlybyCamera>((int)size);
+            for (int i = 0; i < size; i++)
+                FlybyCameras.Add(new LevelFlybyCamera
+                {
+                    X = br2.ReadInt32(),
+                    Y = br2.ReadInt32(),
+                    Z = br2.ReadInt32(),
+                    DirX = br2.ReadInt32(),
+                    DirY = br2.ReadInt32(),
+                    DirZ = br2.ReadInt32(),
+                    Sequence = br2.ReadByte(),
+                    Index = br2.ReadByte(),
+                    Fov = br2.ReadUInt16(),
+                    Roll = br2.ReadInt16(),
+                    Timer = br2.ReadUInt16(),
+                    Speed = br2.ReadUInt16(),
+                    Flags = br2.ReadUInt16(),
+                    RoomId = br2.ReadUInt32(),
+                });
             size = br2.ReadUInt32();
-            geometry.Seek(size * 16, SeekOrigin.Current);
+            SoundSources = new List<LevelSoundSource>((int)size);
+            for (int i = 0; i < size; i++)
+                SoundSources.Add(new LevelSoundSource
+                {
+                    X = br2.ReadInt32(),
+                    Y = br2.ReadInt32(),
+                    Z = br2.ReadInt32(),
+                    SoundId = br2.ReadUInt16(),
+                    Flags = br2.ReadUInt16(),
+                });
             NumBoxes = br2.ReadUInt32();
             Boxes = new LevelBox[NumBoxes];
             for (int i = 0; i < NumBoxes; i++)
@@ -423,6 +485,30 @@ public class TrLevel : IDisposable
         texture.Width = br.ReadUInt32();
         texture.Height = br.ReadUInt32();
         return texture;
+    }
+
+    private static LevelLight ReadLight(BinaryReader br)
+    {
+        // tr4_room_light, 46 bytes, per TRosettaStone.
+        var l = new LevelLight
+        {
+            X = br.ReadInt32(),
+            Y = br.ReadInt32(),
+            Z = br.ReadInt32(),
+            ColourR = br.ReadByte(),
+            ColourG = br.ReadByte(),
+            ColourB = br.ReadByte(),
+            LightType = br.ReadByte(),
+        };
+        l.Intensity = br.ReadUInt16();
+        l.In = br.ReadSingle();
+        l.Out = br.ReadSingle();
+        l.Length = br.ReadSingle();
+        l.CutOff = br.ReadSingle();
+        l.DirX = br.ReadSingle();
+        l.DirY = br.ReadSingle();
+        l.DirZ = br.ReadSingle();
+        return l;
     }
 
     private static Portal ReadPortal(BinaryReader br)

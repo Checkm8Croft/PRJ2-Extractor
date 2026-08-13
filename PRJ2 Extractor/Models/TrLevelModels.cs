@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace PRJ2_Extractor.Models;
 
 public enum FloorType
@@ -95,6 +97,51 @@ public class LevelRoom
     public byte WaterScheme, Reverb, AltGroup;
     public bool IsFlipRoom;
     public short OriginalRoom = -1;
+    public List<LevelLight> Lights = [];
+}
+
+public class LevelLight
+{
+    // Raw tr4_room_light fields, TR world-coordinate convention (Y down-positive), absolute world position.
+    public int X, Y, Z;
+    public byte ColourR, ColourG, ColourB;
+    public byte LightType;   // 0=Sun 1=Point 2=Spot 3=Shadow 4=FogBulb
+    public ushort Intensity;
+    public float In, Out, Length, CutOff;
+    public float DirX, DirY, DirZ;
+}
+
+public class LevelSoundSource
+{
+    // Raw tr_sound_source fields (16 bytes), TR world-coordinate convention, absolute world position.
+    // No room field in the raw struct -- the containing room must be located by position.
+    public int X, Y, Z;
+    public ushort SoundId;
+    public ushort Flags;
+}
+
+public class LevelCamera
+{
+    // Raw tr_camera fields (16 bytes). Shared struct for both Camera and Sink entries (TR engines
+    // use the same array for both); for Sink entries, Room holds Strength and Flags holds a box
+    // index instead of their nominal meaning -- see TrLevel.cs ExportSinks.
+    public int X, Y, Z;
+    public short Room;
+    public ushort Flags;
+}
+
+public class LevelFlybyCamera
+{
+    // Raw tr4_flyby_camera fields (40 bytes).
+    public int X, Y, Z;
+    public int DirX, DirY, DirZ;
+    public byte Sequence, Index;
+    public ushort Fov;
+    public short Roll;
+    public ushort Timer;
+    public ushort Speed;
+    public ushort Flags;
+    public uint RoomId;
 }
 
 public static class PortalExtensions
