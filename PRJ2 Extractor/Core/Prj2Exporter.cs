@@ -128,6 +128,7 @@ public static class Prj2Exporter
             }
 
             room.NormalizeRoomY();
+            ExportLights(room, trLevel.Rooms[i], pr);
             level.Rooms[i] = room;
             tombRooms[i] = room;
         }
@@ -220,7 +221,252 @@ public static class Prj2Exporter
             }
         }
 
+        ExportSoundSources(trLevel, tombRooms, warnings);
+        ExportSinks(trLevel, tombRooms, warnings);
+        ExportCameras(trLevel, tombRooms, warnings);
+        ExportFlybyCameras(trLevel, tombRooms, warnings);
+
         Prj2Writer.SaveToPrj2(prj2FilePath, level);
         return warnings;
+    }
+
+    /// <summary>
+    /// Converts raw tr4_room_light entries (TR world-coordinate convention) into TombLib
+    /// LightInstance objects, inverting the exact formulas used by TombLib's own compiler
+    /// (Compilers/Rooms.cs ConvertLights / BuildRoom) so a round-trip through TombLib reproduces
+    /// the original TR4 light data.
+    /// </summary>
+    private static void ExportLights(Room room, LevelRoom r1, PrjRoom pr)
+    {
+        foreach (var l in r1.Lights)
+        {
+            LightType type = l.LightType switch
+            {
+                0 => LightType.Sun,
+                1 => LightType.Point,
+                2 => LightType.Spot,
+                3 => LightType.Shadow,
+                4 => LightType.FogBulb,
+                _ => LightType.Point,
+            };
+            var light = new LightInstance(type)
+            {
+                // Position is room-relative in TombLib; world position (TR convention) is
+                // RoomInfo.X/Z + Position.X/Z, and -(Position.Y + RoomWorldY) for Y.
+                Position = new Vector3(l.X - r1.X, -l.Y - room.Position.Y, l.Z - r1.Z),
+                Color = new Vector3(l.ColourR / 128.0f, l.ColourG / 128.0f, l.ColourB / 128.0f),
+            };
+
+            // Intensity: raw ushort = round(abs(floatIntensity) * 8191), sign restored for Shadow type
+            // (TombLib negates Intensity for Shadow lights on load/construction).
+            light.Intensity = l.Intensity / 8191.0f;
+            if (type == LightType.Shadow) light.Intensity *= -1;
+
+            switch (type)
+            {
+                case LightType.Point:
+                case LightType.Shadow:
+                    light.InnerRange = l.In / Level.SectorSizeUnit;
+                    light.OuterRange = l.Out / Level.SectorSizeUnit;
+                    break;
+                case LightType.Spot:
+                    light.InnerAngle = (float)(Math.Acos(Math.Clamp(l.In, -1.0, 1.0)) * (180.0 / Math.PI));
+                    light.OuterAngle = (float)(Math.Acos(Math.Clamp(l.Out, -1.0, 1.0)) * (180.0 / Math.PI));
+                    light.InnerRange = l.Length / Level.SectorSizeUnit;
+                    light.OuterRange = l.CutOff / Level.SectorSizeUnit;
+                    SetDirection(light, l.DirX, l.DirY, l.DirZ);
+                    break;
+                case LightType.Sun:
+                    SetDirection(light, l.DirX, l.DirY, l.DirZ);
+                    break;
+                case LightType.FogBulb:
+                    light.InnerRange = l.In / Level.SectorSizeUnit;
+                    light.OuterRange = l.Out / Level.SectorSizeUnit;
+                    light.Intensity = l.Length; // TR5-native storage; TR4 uses a color hack instead
+                    break;
+            }
+
+            room.AddObject(room.Level, light);
+        }
+    }
+
+    private static void SetDirection(IRotateableYX light, float dx, float dy, float dz)
+    {
+        // Inverse of GetDirection()/compiler's DirectionX=-dir.X, DirectionY=dir.Y, DirectionZ=-dir.Z
+        // (light-specific encoding).
+        ApplyDirection(light, -dx, dy, -dz);
+    }
+
+    private static void ApplyDirection(IRotateableYX obj, float dirX, float dirY, float dirZ)
+    {
+        float rx = (float)Math.Asin(Math.Clamp(dirY, -1.0, 1.0));
+        float ry = (float)Math.Atan2(dirX, dirZ);
+        obj.SetArbitaryRotationsYX(ry * (180.0f / (float)Math.PI), rx * (180.0f / (float)Math.PI));
+    }
+
+    /// <summary>
+    /// Sound sources have no room field in the raw tr_sound_source struct; the containing room is
+    /// found by testing the raw world position against each room's X/Z/Y bounds (matches the
+    /// compiler's own room.WorldPos + instance.Position relationship, inverted).
+    /// </summary>
+    private static int FindContainingRoom(TrLevel trLevel, int x, int y, int z)
+    {
+        for (int i = 0; i < trLevel.Rooms.Length; i++)
+        {
+            var r1 = trLevel.Rooms[i];
+            if (r1.NumX == 0 || r1.NumZ == 0) continue;
+            if (x < r1.X || x >= r1.X + r1.NumX * 1024) continue;
+            if (z < r1.Z || z >= r1.Z + r1.NumZ * 1024) continue;
+            if (y < r1.YTop || y > r1.YBottom) continue;
+            return i;
+        }
+        return -1;
+    }
+
+    private static void ExportSoundSources(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    {
+        foreach (var s in trLevel.SoundSources)
+        {
+            int roomIdx = FindContainingRoom(trLevel, s.X, s.Y, s.Z);
+            if (roomIdx < 0 || tombRooms[roomIdx] == null)
+            {
+                warnings.Add($"Sound source (SoundID={s.SoundId}) at ({s.X},{s.Y},{s.Z}) skipped: no containing room found");
+                continue;
+            }
+            var room = tombRooms[roomIdx]!;
+            var r1 = trLevel.Rooms[roomIdx];
+            var sound = new SoundSourceInstance
+            {
+                Position = new Vector3(s.X - r1.X, -s.Y - room.Position.Y, s.Z - r1.Z),
+                SoundId = s.SoundId,
+                // Flags 0xC0 covers both "Always" and "Automatic in a non-alternated room" (identical
+                // encoding); 0x40/0x80 mark automatic play tied to a specific alternate-room state.
+                // Empirically (verified against reference data) 0xC0 is used for Automatic in practice,
+                // so default there rather than Always.
+                PlayMode = s.Flags switch
+                {
+                    0x80 => SoundSourcePlayMode.OnlyInBaseRoom,
+                    0x40 => SoundSourcePlayMode.OnlyInAlternateRoom,
+                    _ => SoundSourcePlayMode.Automatic,
+                },
+            };
+            room.AddObject(room.Level, sound);
+        }
+    }
+
+    /// <summary>
+    /// Sinks share the raw tr_camera array with Camera trigger targets; which indices are which is
+    /// only knowable by scanning trigger ActionLists (done once during TrLevel.Load, see
+    /// TrLevel.cs's Trigger FloorData handling). For entries classified as sinks, the raw "Room"
+    /// field is repurposed by the TombLib compiler to hold Strength (not a room index) and "Flags"
+    /// to hold a pathfinding box index -- see LevelCompilerClassicTR.cs's sink-writing code, which
+    /// this inverts. The containing room itself must be found by position, same as sound sources.
+    /// </summary>
+    private static void ExportSinks(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    {
+        foreach (int idx in trLevel.SinkFloorDataIndices)
+        {
+            if (idx < 0 || idx >= trLevel.Cameras.Count)
+            {
+                warnings.Add($"Sink index {idx} out of range of the raw Cameras[] array ({trLevel.Cameras.Count} entries)");
+                continue;
+            }
+            var c = trLevel.Cameras[idx];
+            int roomIdx = FindContainingRoom(trLevel, c.X, c.Y, c.Z);
+            if (roomIdx < 0 || tombRooms[roomIdx] == null)
+            {
+                warnings.Add($"Sink (index {idx}, strength {c.Room}) at ({c.X},{c.Y},{c.Z}) skipped: no containing room found");
+                continue;
+            }
+            var room = tombRooms[roomIdx]!;
+            var r1 = trLevel.Rooms[roomIdx];
+            var sink = new SinkInstance
+            {
+                Position = new Vector3(c.X - r1.X, -c.Y - room.Position.Y, c.Z - r1.Z),
+                // Empirically confirmed (Francy): raw Strength is stored 1-based, TombLib's is 0-based.
+                Strength = (short)(c.Room - 1),
+            };
+            room.AddObject(room.Level, sink);
+        }
+    }
+
+    /// <summary>
+    /// Static (non-flyby) cameras, found via the CameraFloorDataIndices set collected while parsing
+    /// Trigger FloorData (TrigAction 0x01) during TrLevel.Load. Unlike sinks, tr_camera's Room field
+    /// is a genuine room index for camera entries, so no position-based search is needed.
+    /// </summary>
+    private static void ExportCameras(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    {
+        foreach (int idx in trLevel.CameraFloorDataIndices)
+        {
+            if (idx < 0 || idx >= trLevel.Cameras.Count)
+            {
+                warnings.Add($"Camera index {idx} out of range of the raw Cameras[] array ({trLevel.Cameras.Count} entries)");
+                continue;
+            }
+            var c = trLevel.Cameras[idx];
+            if (c.Room < 0 || c.Room >= tombRooms.Length || tombRooms[c.Room] == null)
+            {
+                warnings.Add($"Camera (index {idx}) at ({c.X},{c.Y},{c.Z}) skipped: invalid room {c.Room}");
+                continue;
+            }
+            var room = tombRooms[c.Room]!;
+            var r1 = trLevel.Rooms[c.Room];
+            var camera = new CameraInstance
+            {
+                Position = new Vector3(c.X - r1.X, -c.Y - room.Position.Y, c.Z - r1.Z),
+                // Flags: 0x3 (bits 0+1 both set) = Sniper; bit0 alone = Locked; bit2 = GlideOut.
+                CameraMode = (c.Flags & 0x3) == 0x3 ? CameraInstanceMode.Sniper
+                    : (c.Flags & 0x1) != 0 ? CameraInstanceMode.Locked
+                    : CameraInstanceMode.Default,
+                GlideOut = (c.Flags & 0x4) != 0,
+            };
+            room.AddObject(room.Level, camera);
+        }
+    }
+
+    /// <summary>
+    /// Flyby cameras, from the raw tr4_flyby_camera array. Unlike static cameras, Room is a genuine
+    /// direct room index here too, so no position search is needed.
+    /// </summary>
+    private static void ExportFlybyCameras(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    {
+        foreach (var c in trLevel.FlybyCameras)
+        {
+            int roomIdx = (int)c.RoomId;
+            if (roomIdx < 0 || roomIdx >= tombRooms.Length || tombRooms[roomIdx] == null)
+            {
+                warnings.Add($"Flyby camera (seq {c.Sequence}, idx {c.Index}) at ({c.X},{c.Y},{c.Z}) skipped: invalid room {roomIdx}");
+                continue;
+            }
+            var room = tombRooms[roomIdx]!;
+            var r1 = trLevel.Rooms[roomIdx];
+
+            var position = new Vector3(c.X - r1.X, -c.Y - room.Position.Y, c.Z - r1.Z);
+            // DirX/Y/Z encode a world-space "look at" point: position + SectorSizeUnit*direction (with
+            // the same Y sign convention as the position fields). Invert to recover the direction.
+            float dirX = (c.DirX - c.X) / (float)Level.SectorSizeUnit;
+            float dirY = (c.Y - c.DirY) / (float)Level.SectorSizeUnit;
+            float dirZ = (c.DirZ - c.Z) / (float)Level.SectorSizeUnit;
+
+            var flyby = new FlybyCameraInstance
+            {
+                Position = position,
+                Sequence = c.Sequence,
+                Number = c.Index,
+                Timer = (short)c.Timer,
+                Flags = c.Flags,
+                Fov = c.Fov * (360.0f / 65536.0f),
+                Speed = c.Speed / 655.0f,
+            };
+            // Roll: encoded as rollTo65536 = (65536 - round(Roll*65536/360)) mod 65536, stored as a
+            // reinterpreted (unchecked) int16. Invert by reading it back as unsigned first.
+            ushort rollRaw = unchecked((ushort)c.Roll);
+            int rollX = (65536 - rollRaw) % 65536;
+            flyby.Roll = rollX * (360.0f / 65536.0f);
+            ApplyDirection(flyby, dirX, dirY, dirZ);
+
+            room.AddObject(room.Level, flyby);
+        }
     }
 }

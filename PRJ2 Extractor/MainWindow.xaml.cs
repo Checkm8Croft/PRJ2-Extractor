@@ -20,7 +20,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Title = $"TR4 to PRJ  v{ProgramVersion:F2}";
+        Title = $"PRJ2 Extractor v{ProgramVersion:F2}";
         SetPlaceholderTexture();
     }
 
