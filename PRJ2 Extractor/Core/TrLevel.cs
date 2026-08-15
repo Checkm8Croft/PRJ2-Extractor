@@ -153,6 +153,13 @@ public class TrLevel : IDisposable
         progress?.Report(1);
         if (result != 0) return result;
 
+        if (Path.GetExtension(filename).Equals(".trc", StringComparison.OrdinalIgnoreCase))
+        {
+            byte r5 = LoadTr5(filename, progress);
+            if (r5 == 0) PostProcessRooms();
+            return r5;
+        }
+
         var memfile = new MemoryStream(File.ReadAllBytes(filename));
         try
         {
@@ -401,26 +408,558 @@ public class TrLevel : IDisposable
             memfile.Dispose();
         }
 
-        if (result == 0)
+        if (result == 0) PostProcessRooms();
+        return result;
+    }
+
+    /// <summary>
+    /// Shared tail step for both the TR4 (.tr4) and TR5 (.trc) loaders: resolves each sector's raw
+    /// FDindex into parsed FloorData entries, and links flip/alternate rooms. FloorData itself
+    /// (function/subfunction bitfield layout) is byte-identical across TR3, TR4 and TR5 per
+    /// TRosettaStone, so ParseFloorData needs no version-specific branching.
+    /// </summary>
+    private void PostProcessRooms()
+    {
+        for (int i = 0; i < Rooms.Length; i++)
         {
-            for (int i = 0; i < Rooms.Length; i++)
+            for (int j = 0; j < Rooms[i].Sectors.Length; j++)
             {
-                for (int j = 0; j < Rooms[i].Sectors.Length; j++)
-                {
-                    if (Rooms[i].Sectors[j].FdIndex == 0) continue;
-                    var sectorFd = new List<ParsedFloorData>();
-                    Rooms[i].Sectors[j].HasFd = true;
-                    ParseFloorData(Rooms[i].Sectors[j].FdIndex, sectorFd);
-                    Rooms[i].Sectors[j].FloorInfo = sectorFd;
-                }
-                if (Rooms[i].AltRoom != -1 && Rooms[i].AltRoom <= Rooms.Length - 1)
-                {
-                    Rooms[Rooms[i].AltRoom].IsFlipRoom = true;
-                    Rooms[Rooms[i].AltRoom].OriginalRoom = (short)i;
-                }
+                if (Rooms[i].Sectors[j].FdIndex == 0) continue;
+                var sectorFd = new List<ParsedFloorData>();
+                Rooms[i].Sectors[j].HasFd = true;
+                ParseFloorData(Rooms[i].Sectors[j].FdIndex, sectorFd);
+                Rooms[i].Sectors[j].FloorInfo = sectorFd;
+            }
+            if (Rooms[i].AltRoom != -1 && Rooms[i].AltRoom <= Rooms.Length - 1)
+            {
+                Rooms[Rooms[i].AltRoom].IsFlipRoom = true;
+                Rooms[Rooms[i].AltRoom].OriginalRoom = (short)i;
             }
         }
+    }
+
+    /// <summary>
+    /// Loads a TR5 (.trc) level. Unlike TR4, TR5's room/animation/object data is NOT wrapped in a
+    /// single zlib chunk (TRosettaStone: "In TR5, those chunks aren't compressed anymore" -- verified
+    /// against trlevel's Level_tr5_pc.cpp, which reads everything directly and sequentially after the
+    /// textiles). Textiles themselves are still zlib-compressed exactly as in TR4 (read_textiles_tr4_5
+    /// is literally shared between TR4 and TR5 in trlevel), so that part of the existing TR4 code is
+    /// reused verbatim below. Field layouts and read order (level header, room header/lights/fog
+    /// bulbs/sectors/portals/static meshes/layers/polys/vertices, model/object-texture sizes, marker
+    /// skip widths) were cross-verified against trlevel (github.com/chreden/trview,
+    /// trlevel/Level_tr5_pc.cpp and trtypes.h) rather than TRosettaStone alone, since TRosettaStone's
+    /// TR5 section disagreed with trlevel on some struct sizes (e.g. fog bulb: 36 vs trlevel's
+    /// verified-working 40 bytes) and trlevel is actual code exercised against real level files.
+    /// </summary>
+    private byte LoadTr5(string filename, IProgress<int>? progress)
+    {
+        byte result = 0;
+        var memfile = new MemoryStream(File.ReadAllBytes(filename));
+        try
+        {
+            using var br = new BinaryReader(memfile, Encoding.UTF8, leaveOpen: true);
+            long fileSize = memfile.Length;
+
+            // --- Textiles: identical compressed-block layout to TR4 (shared read_textiles_tr4_5). ---
+            FileVersion = br.ReadUInt32();
+            NumRoomTextiles = br.ReadUInt16();
+            NumObjTextiles = br.ReadUInt16();
+            NumBumpTextiles = br.ReadUInt16();
+            memfile.Seek(4, SeekOrigin.Current);
+            uint size = br.ReadUInt32();
+            var compressedTex = br.ReadBytes((int)size);
+            progress?.Report((int)(memfile.Position * 100 / fileSize));
+
+            var tex32 = new MemoryStream();
+            using (var geometry1 = new MemoryStream(compressedTex))
+            using (var zlib = new ZLibStream(geometry1, CompressionMode.Decompress))
+                zlib.CopyTo(tex32);
+            tex32.Position = 0;
+            int totalHeight = NumRoomTextiles * 256;
+            if (NumBumpTextiles > 0)
+                totalHeight += (NumBumpTextiles / 2) * 256;
+
+            var allPixels = new byte[256 * totalHeight * 3];
+            using (var br3 = new BinaryReader(tex32, Encoding.UTF8, leaveOpen: true))
+            {
+                int offset = 0;
+                for (int i = 0; i < NumRoomTextiles * 256; i++)
+                {
+                    for (int j = 0; j < 256; j++)
+                    {
+                        byte bl = br3.ReadByte(), gr = br3.ReadByte(), rd = br3.ReadByte(), al = br3.ReadByte();
+                        if (al == 0) { bl = 255; rd = 255; gr = 0; }
+                        allPixels[offset++] = bl;
+                        allPixels[offset++] = gr;
+                        allPixels[offset++] = rd;
+                    }
+                }
+                if (NumBumpTextiles > 0)
+                {
+                    tex32.Seek(NumObjTextiles * 256 * 256 * 4, SeekOrigin.Current);
+                    for (int i = NumRoomTextiles * 256; i < totalHeight; i++)
+                    {
+                        for (int j = 0; j < 256; j++)
+                        {
+                            byte bl = br3.ReadByte(), gr = br3.ReadByte(), rd = br3.ReadByte(), al = br3.ReadByte();
+                            if (al == 0) { bl = 255; rd = 255; gr = 0; }
+                            allPixels[offset++] = bl;
+                            allPixels[offset++] = gr;
+                            allPixels[offset++] = rd;
+                        }
+                    }
+                }
+            }
+            tex32.Dispose();
+
+            var bmp = new WriteableBitmap(256, totalHeight, 96, 96, PixelFormats.Bgr24, null);
+            bmp.WritePixels(new Int32Rect(0, 0, 256, totalHeight), allPixels, 256 * 3, 0);
+            TextureBitmap = bmp;
+
+            // Skip 16-bit fallback compressed textile block.
+            memfile.Seek(4, SeekOrigin.Current);
+            size = br.ReadUInt32();
+            memfile.Seek(size, SeekOrigin.Current);
+            // Skip 2-tile misc compressed textile block.
+            memfile.Seek(4, SeekOrigin.Current);
+            size = br.ReadUInt32();
+            memfile.Seek(size, SeekOrigin.Current);
+            progress?.Report((int)(memfile.Position * 100 / fileSize));
+
+            // --- TR5-only fields between textiles and the room array (absent in TR4). ---
+            br.ReadUInt16(); // LaraType
+            br.ReadUInt16(); // WeatherType
+            memfile.Seek(28, SeekOrigin.Current); // unknown/padding
+
+            // Vestigial in TR5 (the data that follows is NOT actually compressed -- trlevel's own
+            // comment reads "unused in Tomb5"); real files only use these, at the very end, to
+            // relocate to the sound-samples section, which is well past what we parse here.
+            br.ReadUInt32(); // uncompressed_size
+            br.ReadUInt32(); // compressed_size
+            br.ReadUInt32(); // unused value
+
+            uint numRooms = br.ReadUInt32();
+            if (numRooms > ushort.MaxValue)
+            {
+                MessageBox.Show("TR5 room count exceeds supported range!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                return 4;
+            }
+            NumRooms = (ushort)numRooms;
+            Rooms = new LevelRoom[NumRooms];
+            for (int i = 0; i < NumRooms; i++)
+            {
+                progress?.Report(Math.Min(99, (int)(memfile.Position * 100 / fileSize) + 1));
+                Rooms[i] = ReadTr5Room(br, memfile);
+            }
+
+            progress?.Report((int)(memfile.Position * 100 / fileSize));
+            NumFloorData = br.ReadUInt32();
+            FloorData = new ushort[NumFloorData];
+            for (int i = 0; i < NumFloorData; i++)
+                FloorData[i] = br.ReadUInt16();
+
+            size = br.ReadUInt32();
+            memfile.Seek(size * 2, SeekOrigin.Current); // mesh data (words)
+            size = br.ReadUInt32();
+            memfile.Seek(size * 4, SeekOrigin.Current); // mesh pointers (dwords)
+            NumAnimations = br.ReadUInt32();
+            memfile.Seek(NumAnimations * 40, SeekOrigin.Current); // tr4_animation, same 40 bytes as TR4
+            NumStateChanges = br.ReadUInt32();
+            memfile.Seek(NumStateChanges * 6, SeekOrigin.Current);
+            NumAnimDispatches = br.ReadUInt32();
+            memfile.Seek(NumAnimDispatches * 8, SeekOrigin.Current);
+            NumAnimCommands = br.ReadUInt32();
+            memfile.Seek(NumAnimCommands * 2, SeekOrigin.Current);
+            NumMeshtrees = br.ReadUInt32();
+            memfile.Seek(NumMeshtrees * 4, SeekOrigin.Current);
+            progress?.Report((int)(memfile.Position * 100 / fileSize));
+            SizeKeyframes = br.ReadUInt32();
+            memfile.Seek(SizeKeyframes * 2, SeekOrigin.Current);
+            NumMoveables = br.ReadUInt32();
+            // tr5_model = tr_model (18 bytes) + a 2-byte filler = 20 bytes (trtypes.h: struct tr5_model
+            // { tr_model model; uint16_t filler; };), unlike TR4's plain 18-byte tr_model.
+            memfile.Seek(NumMoveables * 20, SeekOrigin.Current);
+            NumStatics = br.ReadUInt32();
+            memfile.Seek(NumStatics * 32, SeekOrigin.Current);
+
+            // SPR marker: trlevel skips 4 bytes unconditionally here for TR5 (vs. TR4's validated
+            // 3-byte "SPR" text skip), so we don't attempt a text check like the TR4 path does.
+            memfile.Seek(4, SeekOrigin.Current);
+
+            progress?.Report((int)(memfile.Position * 100 / fileSize));
+            size = br.ReadUInt32();
+            memfile.Seek(size * 16, SeekOrigin.Current); // sprite textures
+            size = br.ReadUInt32();
+            memfile.Seek(size * 8, SeekOrigin.Current); // sprite sequences
+
+            size = br.ReadUInt32();
+            Cameras = new List<LevelCamera>((int)size);
+            for (int i = 0; i < size; i++)
+                Cameras.Add(new LevelCamera
+                {
+                    X = br.ReadInt32(),
+                    Y = br.ReadInt32(),
+                    Z = br.ReadInt32(),
+                    Room = br.ReadInt16(),
+                    Flags = br.ReadUInt16(),
+                });
+
+            size = br.ReadUInt32();
+            FlybyCameras = new List<LevelFlybyCamera>((int)size);
+            for (int i = 0; i < size; i++)
+                FlybyCameras.Add(new LevelFlybyCamera
+                {
+                    X = br.ReadInt32(),
+                    Y = br.ReadInt32(),
+                    Z = br.ReadInt32(),
+                    DirX = br.ReadInt32(),
+                    DirY = br.ReadInt32(),
+                    DirZ = br.ReadInt32(),
+                    Sequence = br.ReadByte(),
+                    Index = br.ReadByte(),
+                    Fov = br.ReadUInt16(),
+                    Roll = br.ReadInt16(),
+                    Timer = br.ReadUInt16(),
+                    Speed = br.ReadUInt16(),
+                    Flags = br.ReadUInt16(),
+                    RoomId = br.ReadUInt32(),
+                });
+
+            size = br.ReadUInt32();
+            SoundSources = new List<LevelSoundSource>((int)size);
+            for (int i = 0; i < size; i++)
+                SoundSources.Add(new LevelSoundSource
+                {
+                    X = br.ReadInt32(),
+                    Y = br.ReadInt32(),
+                    Z = br.ReadInt32(),
+                    SoundId = br.ReadUInt16(),
+                    Flags = br.ReadUInt16(),
+                });
+
+            NumBoxes = br.ReadUInt32();
+            Boxes = new LevelBox[NumBoxes];
+            for (int i = 0; i < NumBoxes; i++)
+                Boxes[i] = ReadBox(br);
+
+            progress?.Report((int)(memfile.Position * 100 / fileSize));
+            size = br.ReadUInt32();
+            memfile.Seek(size * 2, SeekOrigin.Current); // overlaps
+            memfile.Seek(NumBoxes * 20, SeekOrigin.Current); // zones
+            size = br.ReadUInt32();
+            memfile.Seek(size * 2, SeekOrigin.Current); // animated textures
+            memfile.Seek(1, SeekOrigin.Current); // animated texture uv count byte
+
+            // TEX marker: 4-byte skip in TR5 (vs TR4's validated 3-byte "TEX" text), per trlevel.
+            memfile.Seek(4, SeekOrigin.Current);
+
+            size = br.ReadUInt32();
+            ObjectTextures = new ObjectTexture[size];
+            for (int i = 0; i < ObjectTextures.Length; i++)
+                ObjectTextures[i] = ReadObjectTexture(br, isTr5: true);
+
+            progress?.Report(100);
+        }
+        finally
+        {
+            memfile.Dispose();
+        }
         return result;
+    }
+
+    /// <summary>
+    /// Reads one TR5 room. Unlike TR1-4's single sequential room block, a TR5 room is a fixed
+    /// 208-byte header (tr5_room_header) followed by several sub-blocks addressed by BYTE OFFSETS
+    /// relative to the position right after the header ("dataStart"), rather than laid out strictly
+    /// in file order. Field layout/order verified against trlevel's Level_tr5_pc.cpp
+    /// (load_tr5_pc_room) and trtypes.h (tr5_room_header/tr5_room_light/tr5_fog_bulb/tr5_room_layer/
+    /// tr5_room_vertex/tr4_mesh_face3/tr4_mesh_face4).
+    /// </summary>
+    private static LevelRoom ReadTr5Room(BinaryReader br, MemoryStream stream)
+    {
+        stream.Seek(4, SeekOrigin.Current);        // "XELA" room marker
+        uint roomDataSize = br.ReadUInt32();
+        long roomEnd = stream.Position + roomDataSize;
+
+        var r = new LevelRoom();
+
+        // --- tr5_room_header (208 bytes) ---
+        stream.Seek(4, SeekOrigin.Current);        // separator
+        br.ReadUInt32();                            // end_sd_offset (unused: sector count comes from num_x/z_sectors)
+        uint startSdOffset = br.ReadUInt32();
+        stream.Seek(4, SeekOrigin.Current);        // separator
+        uint endPortalOffset = br.ReadUInt32();
+
+        // tr_room_info: x, y, z, yBottom, yTop (5 int32). "y" (the room's own world-Y offset,
+        // distinct from yBottom/yTop) has no TR1-4 equivalent and LevelRoom doesn't model it --
+        // discarded, matching how TR1-4 rooms (which lack this field entirely) are handled.
+        r.X = br.ReadInt32();
+        br.ReadInt32();                             // y (unused)
+        r.Z = br.ReadInt32();
+        r.YBottom = br.ReadInt32();
+        r.YTop = br.ReadInt32();
+
+        r.NumZ = br.ReadUInt16();
+        r.NumX = br.ReadUInt16();
+        // Raw colour read byte-by-byte into the same B,G,R,A field order the TR4 path uses, so
+        // downstream consumers (Prj2Exporter) see identical semantics either way.
+        r.Colour.B = br.ReadByte();
+        r.Colour.G = br.ReadByte();
+        r.Colour.R = br.ReadByte();
+        r.Colour.A = br.ReadByte();
+        ushort numLights = br.ReadUInt16();
+        ushort numStaticMeshes = br.ReadUInt16();
+        r.Reverb = br.ReadByte();
+        r.AltGroup = br.ReadByte();
+        r.WaterScheme = (byte)br.ReadUInt16();
+        stream.Seek(20, SeekOrigin.Current);       // filler/separator block
+        r.AltRoom = br.ReadInt16();
+        r.Flags = br.ReadUInt16();
+        stream.Seek(20, SeekOrigin.Current);       // filler/separator block
+        br.ReadSingle(); br.ReadSingle(); br.ReadSingle(); // room_x/y/z float duplicates of info.x/y/z (unused)
+        stream.Seek(24, SeekOrigin.Current);       // filler/separator block
+        br.ReadUInt32();                            // num_room_triangles (unused, layers give us this)
+        br.ReadUInt32();                            // num_room_rectangles (unused)
+        br.ReadUInt32();                            // room_lights pointer (runtime-only)
+        br.ReadUInt32();                            // fog_bulbs pointer (runtime-only)
+        br.ReadUInt32();                            // num_lights2 (duplicate of numLights)
+        uint numFogBulbs = br.ReadUInt32();
+        br.ReadSingle();                            // room_y_top (unused)
+        br.ReadSingle();                            // room_y_bottom (unused)
+        uint numLayers = br.ReadUInt32();
+        uint layerOffset = br.ReadUInt32();
+        uint verticesOffset = br.ReadUInt32();
+        uint polyOffset = br.ReadUInt32();
+        br.ReadUInt32();                            // poly_offset2 (unused)
+        br.ReadUInt32();                            // vertices_size (unused, byte size of the vertex block)
+        stream.Seek(16, SeekOrigin.Current);       // trailing separator[4]
+
+        long dataStart = stream.Position;          // the offsets above are relative to here
+
+        // --- Lights (immediately after the header, sequentially -- NOT offset-addressed). ---
+        // IMPORTANT: this layout is NOT the vanilla Core Design/trlevel tr5_room_light struct (92
+        // bytes, 4-float colour, int position/direction twins as verbatim duplicates). It is TombLib's
+        // OWN encoding, verified directly against its compiler source
+        // (TombLib/LevelData/Compilers/Structs.cs, PrjRoom.WriteTr5): a distinct, TombLib-specific
+        // 88-byte layout, since this extractor's real-world input is Tomb-Editor-built TR5 levels.
+        // Per-light record (88 bytes), in file order:
+        //   X,Y,Z (float,12) | ColourR,G,B (float,12, already Color/255.0f normalized) |
+        //   ShadowIntensityOrSentinel (uint32,4: (int)((Intensity/8191)*255) for LightType==3
+        //     [Shadow], else the sentinel 0xCDCDCDCD) | In (float,4) | Out (float,4) |
+        //   SpotInAngle2x (float,4: Acos(In)*2 for Spot else 0, redundant with In -- discarded) |
+        //   SpotOutAngle2x (float,4, redundant -- discarded) | CutOff (float,4) |
+        //   -DirectionX,-DirectionY,-DirectionZ (float,12) | X,Y,Z again as int32 (12, redundant
+        //     duplicate of the float position -- discarded) | fixed-point direction*16384 as int32
+        //     (12, redundant -- discarded) | LightType (byte,1) | 0xCD filler (byte x3).
+        // No FogBulb placeholder slots are interleaved in the lights array at all: TombLib splits
+        // lights (LightType != 4) and bulbs (LightType == 4) into two separate, cleanly sequential
+        // arrays (numLights above already excludes bulbs; numFogBulbs below is the bulb array's own
+        // count), unlike the vanilla format's inline-sentinel scheme.
+        for (int i = 0; i < numLights; i++)
+        {
+            float posX = br.ReadSingle();
+            float posY = br.ReadSingle();
+            float posZ = br.ReadSingle();
+            float colR = br.ReadSingle();
+            float colG = br.ReadSingle();
+            float colB = br.ReadSingle();
+            uint shadowOrSentinel = br.ReadUInt32();
+            float inVal = br.ReadSingle();
+            float outVal = br.ReadSingle();
+            br.ReadSingle(); br.ReadSingle();       // spot in/out angle*2 (redundant with In/Out -- discarded)
+            float cutOff = br.ReadSingle();
+            float dirX = br.ReadSingle();           // -DirectionX as TombLib wrote it
+            float dirY = br.ReadSingle();           // -DirectionY
+            float dirZ = br.ReadSingle();           // -DirectionZ
+            br.ReadInt32(); br.ReadInt32(); br.ReadInt32(); // int32 twin of X,Y,Z (redundant -- discarded)
+            br.ReadInt32(); br.ReadInt32(); br.ReadInt32(); // fixed-point (*16384) twin of direction (redundant -- discarded)
+            byte lightType = br.ReadByte();
+            br.ReadByte(); br.ReadByte(); br.ReadByte();    // 0xCD filler
+
+            // TombLib apparently leaves orphaned/deleted light slots in its own array with a fixed
+            // debug-fill pattern rather than compacting them out: LightType 205 (0xCD, the classic
+            // "uninitialized memory" fill byte) shows up consistently with the same garbage
+            // coordinates across many rooms in real Tomb-Editor-built levels. Valid LightType is 0-4;
+            // anything else is one of these placeholder slots -- skip it rather than importing a
+            // bogus light at a billions-of-units-away position.
+            if (lightType > 4) continue;
+
+            var light = new LevelLight
+            {
+                X = (int)MathF.Round(posX), Y = (int)MathF.Round(posY), Z = (int)MathF.Round(posZ),
+                // TombLib normalizes by /255.0f at TR5-write time (verified in WriteTr5); *255 here
+                // recovers the original 0-255 byte scale that Prj2Exporter's shared (TR4-designed)
+                // ExportLights expects (it divides ColourR/G/B by 128.0f itself).
+                ColourR = (byte)Math.Clamp(MathF.Round(colR * 255f), 0, 255),
+                ColourG = (byte)Math.Clamp(MathF.Round(colG * 255f), 0, 255),
+                ColourB = (byte)Math.Clamp(MathF.Round(colB * 255f), 0, 255),
+                LightType = lightType,
+                In = inVal,
+                Out = outVal,
+                // Spot's InnerRange (Prj2Exporter reads l.Length) has no dedicated field in TombLib's
+                // TR5 write -- only CutOff (outer) is stored. Falling back to CutOff for both is a
+                // genuine format limitation (TombLib itself only round-trips the outer distance for
+                // TR5 spots), not a parsing guess.
+                Length = cutOff,
+                CutOff = cutOff,
+                // Derived by solving Prj2Exporter's existing (TR4-designed, unchanged) SetDirection/
+                // ApplyDirection(-dx, dy, -dz) against TombLib's TR5 write of (-DirectionX, -DirectionY,
+                // -DirectionZ), so the same call recovers TombLib's original DirectionX/Y/Z unchanged:
+                // only the Y component needs negating here, X and Z pass through as read.
+                DirX = dirX, DirY = -dirY, DirZ = dirZ,
+            };
+
+            // Shadow-type lights store their real intensity in the field vanilla TR5 uses as a spare
+            // colour channel; every other type leaves the 0xCDCDCDCD sentinel there (meaningless).
+            if (lightType == 3)
+                light.Intensity = (ushort)Math.Clamp(MathF.Round((int)shadowOrSentinel / 255.0f * 8191.0f), 0, 8191);
+            else
+                // No dedicated intensity scalar for non-Shadow TR5 lights (brightness lives in the
+                // colour floats) -- default to "full", matching Prj2Exporter's Intensity/8191.0f
+                // normalization (8191 -> 1.0).
+                light.Intensity = 8191;
+
+            r.Lights.Add(light);
+        }
+
+        // --- Fog bulbs: a separate, cleanly sequential array (see note above) -- 36 bytes each,
+        // per TombLib's WriteTr5: X,Y,Z (float,12) | Out/radius (float,4) | Out*Out/square_radius
+        // (float,4, redundant -- discarded) | Length*65535.0f/density (float,4) | ColourR,G,B
+        // (float,12, already /255.0f normalized). No inner radius or 4th colour float, unlike the
+        // vanilla 40-byte struct.
+        for (int i = 0; i < numFogBulbs; i++)
+        {
+            float fx = br.ReadSingle();
+            float fy = br.ReadSingle();
+            float fz = br.ReadSingle();
+            float radius = br.ReadSingle();
+            br.ReadSingle();                        // radius^2 (redundant -- discarded)
+            float densityRaw = br.ReadSingle();
+            float fr = br.ReadSingle();
+            float fg = br.ReadSingle();
+            float fb = br.ReadSingle();
+
+            r.Lights.Add(new LevelLight
+            {
+                X = (int)MathF.Round(fx), Y = (int)MathF.Round(fy), Z = (int)MathF.Round(fz),
+                ColourR = (byte)Math.Clamp(MathF.Round(fr * 255f), 0, 255),
+                ColourG = (byte)Math.Clamp(MathF.Round(fg * 255f), 0, 255),
+                ColourB = (byte)Math.Clamp(MathF.Round(fb * 255f), 0, 255),
+                LightType = 4,
+                // Prj2Exporter's FogBulb case reads In/Out as inner/outer range and Length as
+                // "TR5-native storage" intensity. TombLib's bulb has one radius (no separate inner),
+                // so In=0; density was scaled by *65535.0f at write time, so /65535.0f recovers it.
+                In = 0,
+                Out = radius,
+                Length = densityRaw / 65535.0f,
+            });
+        }
+
+        stream.Position = dataStart + startSdOffset;
+        r.Sectors = new LevelSector[r.NumX * r.NumZ];
+        for (int j = 0; j < r.NumX * r.NumZ; j++)
+        {
+            r.Sectors[j] = ReadSector(br);
+            r.Sectors[j].HasFd = false;
+        }
+
+        r.NumPortals = br.ReadUInt16();
+        r.Portals = new Portal[r.NumPortals];
+        for (int j = 0; j < r.NumPortals; j++)
+            r.Portals[j] = ReadPortal(br);
+        stream.Seek(2, SeekOrigin.Current);        // separator
+
+        stream.Position = dataStart + endPortalOffset;
+        // tr3_room_staticmesh (20 bytes); count comes from the header (no inline uint16 count
+        // prefix here, unlike TR4's read_room_static_meshes).
+        stream.Seek(numStaticMeshes * 20, SeekOrigin.Current);
+
+        stream.Position = dataStart + layerOffset;
+        var layerNumVertices = new ushort[numLayers];
+        var layerNumRectangles = new ushort[numLayers];
+        var layerNumTriangles = new ushort[numLayers];
+        for (int i = 0; i < numLayers; i++)
+        {
+            layerNumVertices[i] = br.ReadUInt16();
+            stream.Seek(4, SeekOrigin.Current);    // _1[2]
+            layerNumRectangles[i] = br.ReadUInt16();
+            layerNumTriangles[i] = br.ReadUInt16();
+            stream.Seek(6, SeekOrigin.Current);    // _2[3]
+            stream.Seek(12 + 12, SeekOrigin.Current); // bounding_box_min/max (tr5_vertex x2)
+            stream.Seek(16, SeekOrigin.Current);   // _3[4]
+        }
+
+        stream.Position = dataStart + polyOffset;
+        var allRects = new List<RoomFace>();
+        var allTris = new List<RoomFace>();
+        ushort vertexOffset = 0;
+        for (int i = 0; i < numLayers; i++)
+        {
+            for (int j = 0; j < layerNumRectangles[i]; j++)
+                allRects.Add(ReadRoomFaceTr5(br, 4, vertexOffset));
+            for (int j = 0; j < layerNumTriangles[i]; j++)
+            {
+                var face = ReadRoomFaceTr5(br, 3, vertexOffset);
+                face.IsTriangle = true;
+                allTris.Add(face);
+            }
+            vertexOffset += layerNumVertices[i];
+        }
+        r.Rectangles = allRects.ToArray();
+        r.Triangles = allTris.ToArray();
+
+        stream.Position = dataStart + verticesOffset;
+        var allVerts = new List<RoomVertex>();
+        for (int i = 0; i < numLayers; i++)
+        {
+            for (int j = 0; j < layerNumVertices[i]; j++)
+            {
+                float vx = br.ReadSingle();
+                float vy = br.ReadSingle();
+                float vz = br.ReadSingle();
+                br.ReadSingle(); br.ReadSingle(); br.ReadSingle(); // normal (unused)
+                uint colour = br.ReadUInt32();
+                allVerts.Add(new RoomVertex
+                {
+                    // Same raw world-unit scale as TR1-4's int16 room-relative coords (verified:
+                    // trlevel's own convert_vertices truncates these floats straight to int16,
+                    // no rescale).
+                    X = (short)vx, Y = (short)vy, Z = (short)vz,
+                    Lighting = 0, Attributes = 0,
+                    Colour = PackColour15(colour),
+                });
+            }
+        }
+        r.Vertices = allVerts.ToArray();
+
+        stream.Position = roomEnd;
+        return r;
+    }
+
+    private static RoomFace ReadRoomFaceTr5(BinaryReader br, int vertexCount, ushort vertexOffset)
+    {
+        // tr4_mesh_face3/tr4_mesh_face4 (used for TR5 room polys, unlike TR1-4's plain tr_face3/4):
+        // vertices + texture, PLUS a trailing "effects" word that TR1-4 room faces don't have.
+        var face = new RoomFace { Vertices = new ushort[vertexCount] };
+        for (int i = 0; i < vertexCount; i++)
+            face.Vertices[i] = (ushort)(br.ReadUInt16() + vertexOffset);
+        face.Texture = br.ReadUInt16();
+        br.ReadUInt16();                            // effects (unused)
+        return face;
+    }
+
+    /// <summary>
+    /// Down-converts an 8-bit-per-channel 0x00RRGGBB colour (TR5 room vertex colour, reinterpreted
+    /// from its raw uint32) to the 5-bit-per-channel packed format RoomVertex.Colour already uses
+    /// for TR3/4 vertex colours. Currently unused by the PRJ2 export pipeline either way (kept for
+    /// parity/future use).
+    /// </summary>
+    private static ushort PackColour15(uint argb)
+    {
+        byte r8 = (byte)((argb >> 16) & 0xFF);
+        byte g8 = (byte)((argb >> 8) & 0xFF);
+        byte b8 = (byte)(argb & 0xFF);
+        return (ushort)(((r8 >> 3) << 10) | ((g8 >> 3) << 5) | (b8 >> 3));
     }
 
     private static void ReadRoomData(BinaryReader br, LevelRoom room)
@@ -467,7 +1006,7 @@ public class TrLevel : IDisposable
         return face;
     }
 
-    private static ObjectTexture ReadObjectTexture(BinaryReader br)
+    private static ObjectTexture ReadObjectTexture(BinaryReader br, bool isTr5 = false)
     {
         var texture = new ObjectTexture
         {
@@ -484,6 +1023,9 @@ public class TrLevel : IDisposable
         texture.OriginalV = br.ReadUInt32();
         texture.Width = br.ReadUInt32();
         texture.Height = br.ReadUInt32();
+        // tr5_object_texture = tr4_object_texture (38 bytes, above) + a 2-byte filler
+        // (verified against trlevel's trtypes.h: struct tr5_object_texture { tr4_object_texture tr4_texture; uint16_t filler; }).
+        if (isTr5) br.ReadUInt16();
         return texture;
     }
 
@@ -1027,7 +1569,12 @@ public class TrLevel : IDisposable
         {
             if (!Rooms[i].IsFlipRoom) continue;
             var r = Rooms[i];
-            for (int j = 0; j < p.Rooms[i].Doors.Length; j++)
+            // Assumes a flip room mirrors its original room's door/portal count exactly, which TR4
+            // levels observed so far always satisfied. Some TR5 levels violate it (rooms with a
+            // handful more/fewer portals on one side of the flip pair) -- guard rather than crash;
+            // any door beyond the shorter side's count is left at its ConvertToPrj default.
+            int pairedDoorCount = Math.Min(p.Rooms[i].Doors.Length, p.Rooms[r.OriginalRoom].Doors.Length);
+            for (int j = 0; j < pairedDoorCount; j++)
             {
                 var d = p.Rooms[r.OriginalRoom].Doors[j];
                 p.Rooms[i].DoorThingIndex[j] = p.Rooms[r.OriginalRoom].DoorThingIndex[j];

@@ -43,7 +43,7 @@ public partial class MainWindow : Window
         var dlg = new OpenFileDialog
         {
             DefaultExt = ".tr4",
-            Filter = "Tomb Raider 4 Files (*.tr4)|*.tr4|All files (*.*)|*.*"
+            Filter = "Tomb Raider Level Files (*.tr4;*.trc)|*.tr4;*.trc|Tomb Raider 4 Files (*.tr4)|*.tr4|Tomb Raider 5 Files (*.trc)|*.trc|All files (*.*)|*.*"
         };
         if (dlg.ShowDialog() == true)
             LoadTr4File(dlg.FileName);
@@ -51,9 +51,10 @@ public partial class MainWindow : Window
 
     private void LoadTr4File(string path)
     {
-        if (!path.EndsWith(".tr4", StringComparison.OrdinalIgnoreCase))
+        bool isTr5 = path.EndsWith(".trc", StringComparison.OrdinalIgnoreCase);
+        if (!isTr5 && !path.EndsWith(".tr4", StringComparison.OrdinalIgnoreCase))
         {
-            MessageBox.Show("Not a TR4 file!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show("Not a TR4/TR5 file!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
             return;
         }
 
@@ -86,7 +87,7 @@ public partial class MainWindow : Window
                     ClearLevel();
                     return;
                 case 2:
-                    MessageBox.Show("TR4 signature not found!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show("TR4/TR5 signature not found!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                     ClearLevel();
                     return;
                 case 3:
@@ -94,7 +95,7 @@ public partial class MainWindow : Window
                     ClearLevel();
                     return;
                 default:
-                    MessageBox.Show("Error reading TR4!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                    MessageBox.Show("Error reading TR4/TR5!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
                     ClearLevel();
                     return;
             }
@@ -313,7 +314,7 @@ public partial class MainWindow : Window
 
         var path = files[0];
         var ext = Path.GetExtension(path).ToLowerInvariant();
-        if (ext == ".tr4")
+        if (ext == ".tr4" || ext == ".trc")
             LoadTr4File(path);
         else if (ext == ".prj")
         {
