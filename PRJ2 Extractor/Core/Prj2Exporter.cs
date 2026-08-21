@@ -1,9 +1,11 @@
 using System.Numerics;
+using System.IO;
 using PRJ2_Extractor.Models;
 using TombLib;
 using TombLib.LevelData;
 using TombLib.LevelData.IO;
 using TombLib.LevelData.SectorEnums;
+using TombLib.Utils;
 using System.Diagnostics;
 
 namespace PRJ2_Extractor.Core;
@@ -34,7 +36,10 @@ public static class Prj2Exporter
         // creates real diagonal-split geometry, so leaving it on turns flat/tilted terrain into spiky,
         // invalid sectors. Real splits from TR4 FloorData (Split1-4) are still applied unconditionally
         // by ApplyFloorSplit/ApplyCeilingSplit regardless of this flag.
-        TrProject p = trLevel.ConvertToPrj(prj2FilePath, saveTga: false, fixFdivs: false);
+        // saveTga=true: writes the room-texture atlas next to the .prj2 as a real .tga file and
+        // populates p.TgaFilePath -- needed below to build a TombLib LevelTexture that actual face
+        // textures can reference (SetFaceTexture requires a real Texture with a loadable image).
+        TrProject p = trLevel.ConvertToPrj(prj2FilePath, saveTga: true, fixFdivs: false);
 
         // Resolves portals into p.Rooms[i].Doors AND corrects floor/ceiling heights and sector
         // Ids of border-wall blocks adjacent to a door (MarkDoorBlocks). Must run before we read
@@ -43,7 +48,37 @@ public static class Prj2Exporter
         trLevel.MakeDoors(p, tr2PrjLinks: false);
 
         var level = new Level();
+        // Needed before MakeRelative/MakeAbsolute calls below (texture registration) -- mirrors
+        // PrjLoader's own "level.Settings.LevelFilePath = ..." setup at the start of LoadFromPrj.
+        level.Settings.LevelFilePath = prj2FilePath;
         var tombRooms = new Room?[p.Rooms.Length];
+
+        // Register the room-texture atlas TGA (written above by ConvertToPrj) as a TombLib
+        // LevelTexture, so sector face textures below can reference real image data. Mirrors
+        // PrjLoader's own texture-loading step ("Read texture" in LoadFromPrj): same
+        // convert512PixelsToDoubleRows=true (a no-op for our always-256-wide atlas, kept only for
+        // parity with the reference behaviour).
+        LevelTexture? levelTexture = null;
+        if (!string.IsNullOrWhiteSpace(p.TgaFilePath))
+        {
+            string tgaPath = Path.Combine(Path.GetDirectoryName(prj2FilePath) ?? ".", p.TgaFilePath.Trim());
+            if (File.Exists(tgaPath))
+            {
+                levelTexture = new LevelTexture(level.Settings,
+                    level.Settings.MakeRelative(tgaPath, VariableType.LevelDirectory), true);
+                level.Settings.Textures.Add(levelTexture);
+                if (levelTexture.LoadException != null)
+                    warnings.Add($"Texture atlas '{tgaPath}' failed to load: {levelTexture.LoadException.Message}");
+            }
+            else
+            {
+                warnings.Add($"Texture atlas '{tgaPath}' was not found on disk; face textures will be skipped.");
+            }
+        }
+        else
+        {
+            warnings.Add("No texture atlas was exported; face textures will be skipped.");
+        }
 
         // --- Pass 1: create rooms and sector geometry ---
         for (int i = 0; i < p.Rooms.Length; i++)
@@ -225,6 +260,24 @@ public static class Prj2Exporter
         ExportSinks(trLevel, tombRooms, warnings);
         ExportCameras(trLevel, tombRooms, warnings);
         ExportFlybyCameras(trLevel, tombRooms, warnings);
+
+        // --- Pass 4: face textures ---
+        // Must run after ALL rooms/portals are set up: IsFaceDefined/GetFaceShape below depend on
+        // each room's mesh having been built (mirrors PrjLoader's own two-phase "Build geometry"
+        // then "Texturize faces" order in LoadFromPrj).
+        if (levelTexture != null)
+        {
+            foreach (var room in tombRooms)
+                room?.BuildGeometry(useLegacyCode: false);
+
+            for (int i = 0; i < p.Rooms.Length; i++)
+            {
+                var pr = p.Rooms[i];
+                var room = tombRooms[i];
+                if (pr.Id == 1 || room == null) continue;
+                ApplyRoomFaceTextures(room, pr, levelTexture, p.Textures);
+            }
+        }
 
         Prj2Writer.SaveToPrj2(prj2FilePath, level);
         return warnings;
@@ -468,5 +521,180 @@ public static class Prj2Exporter
 
             room.AddObject(room.Level, flyby);
         }
+    }
+
+    /// <summary>
+    /// Assigns face textures for one room's sectors, reading our own classic-PRJ-model
+    /// Block.Textures[] (already populated by TrLevel.ApplyRoomMeshTextures/ApplyWallFace) and
+    /// writing via TombLib's modern Sector.SetFaceTexture. The slot -> SectorFace resolution
+    /// (which of two adjacent sectors a wall texture "belongs" to) is ported from TombLib's own
+    /// PrjLoader.cs (its "Texturize faces" loop in LoadFromPrj), which performs the identical
+    /// classic-PRJ-slot-to-modern-SectorFace mapping for the same on-disk format.
+    ///
+    /// SIMPLIFIED relative to PrjLoader: PrjLoader also handles slots 10-13 (Floor2/Ceiling2 --
+    /// the classic format's second floor/ceiling split tier, from NGLE's stacked-wall feature) and
+    /// the IsUndefinedButHasArea disambiguation that goes with them. Our Pass-1 sector setup
+    /// (Prj2Exporter.Export) never calls Sector.SetHeight(Floor2/Ceiling2, ...) for any sector --
+    /// verified true for TR4 raw FloorData, which only ever encodes one floor split and one ceiling
+    /// split per sector (see TrLevel.ApplyFloorData) -- so IsFaceDefined for every Floor2/Ceiling2
+    /// SectorFace is always false here, and PrjLoader's corresponding branches collapse to their
+    /// single non-Floor2/Ceiling2 case unconditionally. Slots 10-13 are therefore never read.
+    /// </summary>
+    private static void ApplyRoomFaceTextures(Room room, PrjRoom pr, LevelTexture levelTexture, TexInfo[] textures)
+    {
+        for (int x = 0; x < pr.XSize; x++)
+        for (int z = 0; z < pr.ZSize; z++)
+        {
+            int b = x * pr.ZSize + z;
+            if (b < 0 || b >= pr.Blocks.Length) continue;
+            var block = pr.Blocks[b];
+
+            LoadTextureArea(room, x, z, SectorFace.Floor, levelTexture, textures, block.Textures[0]);
+            LoadTextureArea(room, x, z, SectorFace.Ceiling, levelTexture, textures, block.Textures[1]);
+            LoadTextureArea(room, x, z, SectorFace.Floor_Triangle2, levelTexture, textures, block.Textures[8]);
+            LoadTextureArea(room, x, z, SectorFace.Ceiling_Triangle2, levelTexture, textures, block.Textures[9]);
+
+            // Slot 2 (North/-X QA): own -X side if it has real geometry there, else the
+            // neighbour's +X side (PrjLoader: "case 10/2" collapsed -- Floor2 branch never taken).
+            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeX_QA))
+                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeX_QA, levelTexture, textures, block.Textures[2]);
+            else if (x > 0)
+                LoadTextureArea(room, x - 1, z, SectorFace.Wall_PositiveX_QA, levelTexture, textures, block.Textures[2]);
+
+            // Slot 3 (North/-X WS).
+            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeX_WS))
+                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeX_WS, levelTexture, textures, block.Textures[3]);
+            else if (x > 0)
+                LoadTextureArea(room, x - 1, z, SectorFace.Wall_PositiveX_WS, levelTexture, textures, block.Textures[3]);
+
+            // Slot 4 (North/-X Middle).
+            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeX_Middle))
+                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeX_Middle, levelTexture, textures, block.Textures[4]);
+            else if (x > 0)
+                LoadTextureArea(room, x - 1, z, SectorFace.Wall_PositiveX_Middle, levelTexture, textures, block.Textures[4]);
+
+            // Slot 5 (West/-Z QA).
+            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeZ_QA))
+                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeZ_QA, levelTexture, textures, block.Textures[5]);
+            else if (z > 0)
+                LoadTextureArea(room, x, z - 1, SectorFace.Wall_PositiveZ_QA, levelTexture, textures, block.Textures[5]);
+
+            // Slot 6 (West/-Z WS).
+            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeZ_WS))
+                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeZ_WS, levelTexture, textures, block.Textures[6]);
+            else if (z > 0)
+                LoadTextureArea(room, x, z - 1, SectorFace.Wall_PositiveZ_WS, levelTexture, textures, block.Textures[6]);
+
+            // Slot 7 (West/-Z Middle).
+            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeZ_Middle))
+                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeZ_Middle, levelTexture, textures, block.Textures[7]);
+            else if (z > 0)
+                LoadTextureArea(room, x, z - 1, SectorFace.Wall_PositiveZ_Middle, levelTexture, textures, block.Textures[7]);
+        }
+    }
+
+    /// <summary>
+    /// Builds a TextureArea from one classic-PRJ BlockTex slot and writes it via
+    /// Sector.SetFaceTexture. UV construction, rotation handling, triangle-corner selection and
+    /// flip/blend-mode flags are ported verbatim from TombLib's PrjLoader.LoadTextureArea (its
+    /// TYPE_TEXTURE_TILE case) -- BlockTex's fields (Tipo/Index/Flags1/Rotation/Triangle) are a
+    /// direct 1:1 match to PrjLoader's own on-disk PrjFace fields
+    /// (_txtType/_txtIndex/_txtFlags/_txtRotation/_txtTriangle), and our TexInfo (X/Y/Right/Bottom)
+    /// matches its PrjTexInfo (_x/_y/_width/_height) the same way -- both are the same classic-PRJ
+    /// on-disk texture-table record, just already parsed into our own model by TrLevel/TrProject.
+    /// texStartCoord is fixed at 0 here (PrjLoader's adjustUV=false path): we always want
+    /// uncropped/exact UVs, matching a plain re-import with half-pixel correction turned off.
+    /// </summary>
+    private static void LoadTextureArea(Room room, int x, int z, SectorFace face, LevelTexture levelTexture,
+        TexInfo[] textures, BlockTex blockTex)
+    {
+        const float texStartCoord = 0.0f;
+        Sector sector = room.Sectors[x, z];
+
+        if (blockTex.Tipo != 0x0007) return; // not TYPE_TEXTURE_TILE: nothing was assigned here, leave undefined
+
+        int texIndex = ((blockTex.Flags1 & 0x03) << 8) | blockTex.Index;
+        if (texIndex < 0 || texIndex >= textures.Length) return;
+
+        TexInfo texInfo = textures[texIndex];
+
+        var uv = new[]
+        {
+            new Vector2(texInfo.X + texStartCoord, texInfo.Y + texStartCoord),
+            new Vector2(texInfo.X + texInfo.Right + (1.0f - texStartCoord), texInfo.Y + texStartCoord),
+            new Vector2(texInfo.X + texInfo.Right + (1.0f - texStartCoord), texInfo.Y + texInfo.Bottom + (1.0f - texStartCoord)),
+            new Vector2(texInfo.X + texStartCoord, texInfo.Y + texInfo.Bottom + (1.0f - texStartCoord)),
+        };
+
+        var texture = new TextureArea
+        {
+            Texture = levelTexture,
+            DoubleSided = (blockTex.Flags1 & 0x04) != 0,
+            BlendMode = (blockTex.Flags1 & 0x08) != 0 ? BlendMode.Additive : BlendMode.Normal,
+        };
+
+        // Apply flipping.
+        if ((blockTex.Flags1 & 0x80) != 0)
+        {
+            (uv[0], uv[1]) = (uv[1], uv[0]);
+            (uv[2], uv[3]) = (uv[3], uv[2]);
+        }
+
+        ushort rotation = blockTex.Rotation;
+        if (room.GetFaceShape(x, z, face) == FaceShape.Triangle)
+        {
+            switch (blockTex.Triangle)
+            {
+                case 0: texture.TexCoord0 = uv[0]; texture.TexCoord1 = uv[1]; texture.TexCoord2 = uv[3]; break;
+                case 1: texture.TexCoord0 = uv[1]; texture.TexCoord1 = uv[2]; texture.TexCoord2 = uv[0]; break;
+                case 2: texture.TexCoord0 = uv[2]; texture.TexCoord1 = uv[3]; texture.TexCoord2 = uv[1]; break;
+                case 3: texture.TexCoord0 = uv[3]; texture.TexCoord1 = uv[0]; texture.TexCoord2 = uv[2]; break;
+                default:
+                    sector.SetFaceTexture(face, new TextureArea());
+                    return;
+            }
+
+            if (face == SectorFace.Floor)
+            {
+                rotation += sector.Floor.SplitDirectionIsXEqualsZ ? (byte)1 : (byte)2;
+            }
+            else if (face == SectorFace.Ceiling)
+            {
+                (texture.TexCoord0, texture.TexCoord2) = (texture.TexCoord2, texture.TexCoord0);
+                rotation += sector.Ceiling.SplitDirectionIsXEqualsZ ? (byte)2 : (byte)1;
+                rotation = (ushort)(3000 - rotation);
+            }
+            else if (face == SectorFace.Ceiling_Triangle2)
+            {
+                (texture.TexCoord0, texture.TexCoord2) = (texture.TexCoord2, texture.TexCoord0);
+                rotation = (ushort)(3000 - rotation);
+            }
+
+            rotation %= 3;
+            for (int rot = 0; rot < rotation; rot++)
+                (texture.TexCoord2, texture.TexCoord1, texture.TexCoord0) = (texture.TexCoord1, texture.TexCoord0, texture.TexCoord2);
+
+            texture.TexCoord3 = texture.TexCoord2;
+        }
+        else
+        {
+            if (face == SectorFace.Floor || face == SectorFace.Floor_Triangle2)
+                rotation += 2;
+
+            rotation %= 4;
+            for (int rot = 0; rot < rotation; rot++)
+                (uv[3], uv[2], uv[1], uv[0]) = (uv[2], uv[1], uv[0], uv[3]);
+
+            if (face == SectorFace.Ceiling || face == SectorFace.Ceiling_Triangle2)
+            {
+                texture.TexCoord0 = uv[2]; texture.TexCoord1 = uv[1]; texture.TexCoord2 = uv[0]; texture.TexCoord3 = uv[3];
+            }
+            else
+            {
+                texture.TexCoord0 = uv[3]; texture.TexCoord1 = uv[0]; texture.TexCoord2 = uv[1]; texture.TexCoord3 = uv[2];
+            }
+        }
+
+        sector.SetFaceTexture(face, texture);
     }
 }
