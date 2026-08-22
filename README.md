@@ -1,12 +1,7 @@
-# PRJ2 Extractor
+## PRJ Extractor
 
-PRJ2 Extractor is a tool for extracting from Tomb Raider levels, prj2 files that contains the geometry of the level.
+Branch of PRJ2-Extractor, that basically contains sapper-trle's code translated to C#
 
-## Disclaimer
+This is for preserve the base of the actual program
 
-This code is based on sapper-trle's TR42PRJ source code, this program is his code translated to C#, the original code is this [](https://github.com/sapper-trle/TR42PRJ).
-
-## TODO
-
-- [ ] Add support for TR1, 2, 3 and 5.
-- [ ] Add PRJ to PRJ2 conversion.
+For now I'm focusing on the PRJ2 extraction, may in future I'll continue supporting PRJ, but since is obsolete, idk if is a good thing to do
