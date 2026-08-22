@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using System.IO;
 using PRJ2_Extractor.Models;
 using TombLib;
@@ -126,7 +126,7 @@ public static class Prj2Exporter
                     sector.Floor.XpZp = (short)Clicks.ToWorld(floorBase - block.FloorCorner[3]);
 
                     // NOTE (interpretazione, verificata contro l'ordine di lettura in PrjLoader.cs):
-                    // nel formato PRJ classico l'ordine degli angoli del soffitto è invertito
+                    // nel formato PRJ classico l'ordine degli angoli del soffitto Ã¨ invertito
                     // rispetto al pavimento: [XpZp, XnZp, XnZn, XpZn].
                     int ceilBase = -pr.YBottom + block.Ceiling;
                     sector.Ceiling.XpZp = (short)Clicks.ToWorld(ceilBase + block.CeilCorner[0]);
@@ -613,7 +613,7 @@ public static class Prj2Exporter
 
         if (blockTex.Tipo != 0x0007) return; // not TYPE_TEXTURE_TILE: nothing was assigned here, leave undefined
 
-        int texIndex = ((blockTex.Flags1 & 0x03) << 8) | blockTex.Index;
+        int texIndex = blockTex.Index; // BlockTex.Index is now a full int (no 10-bit Flags1 packing).
         if (texIndex < 0 || texIndex >= textures.Length) return;
 
         TexInfo texInfo = textures[texIndex];

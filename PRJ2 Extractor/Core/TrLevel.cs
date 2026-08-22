@@ -1239,7 +1239,7 @@ public class TrLevel : IDisposable
                 }
             }
 
-            ApplyRoomMeshTextures(p.Rooms[i], r1, ObjectTextures, NumRoomTextiles + NumObjTextiles);
+            ApplyRoomMeshTextures(p.Rooms[i], r1, ObjectTextures);
         }
 
         BuildPrjTextureTable(p, tileRemap);
@@ -1256,31 +1256,25 @@ public class TrLevel : IDisposable
     /// </summary>
     private (WriteableBitmap atlas, Dictionary<int, int> tileRemap) BuildRoomTextureAtlas()
     {
-        // Tiles at index >= NumRoomTextiles+NumObjTextiles are the bump-map range (verified: this
-        // level''s single highest-referenced tile, 12, sits exactly there -- NumRoomTextiles=4,
-        // NumObjTextiles=6, so 10/11/12 are the 3 addressable bump slots implied by
-        // NumBumpTextiles/2=3). Bump data isn''t a plain diffuse colour image (it encodes surface
-        // normals/height), so pulling it into a diffuse room-texture atlas produces a garbled,
-        // clearly-wrong swatch (confirmed visually in Tomb Editor: a distinct checkered/icon-like
-        // block unlike any real room texture). Excluded here; ApplyRoomFaceTexture below skips any
-        // face that references one of these tiles rather than writing a bogus texture for it.
-        int maxDiffuseTile = NumRoomTextiles + NumObjTextiles;
+        // NOTE: an earlier version of this code excluded tiles >= NumRoomTextiles+NumObjTextiles,
+        // on the theory that they were bump-map data (not plain diffuse colour). Direct visual
+        // inspection of that raw pixel region disproved this: it contains ordinary, well-formed
+        // room textures (brick, wood, roof tiles, decorative reliefs), not bump/normal data. All
+        // referenced tiles are kept regardless of index range.
         var usedTiles = new SortedSet<int>();
         foreach (var room in Rooms)
         {
             foreach (var f in room.Rectangles)
             {
                 int ti = f.Texture & 0x7FFF;
-                if (ti < 0 || ti >= ObjectTextures.Length) continue;
-                int tile = ObjectTextures[ti].TileAndFlag & 0x7FFF;
-                if (tile < maxDiffuseTile) usedTiles.Add(tile);
+                if (ti >= 0 && ti < ObjectTextures.Length)
+                    usedTiles.Add(ObjectTextures[ti].TileAndFlag & 0x7FFF);
             }
             foreach (var f in room.Triangles)
             {
                 int ti = f.Texture & 0x7FFF;
-                if (ti < 0 || ti >= ObjectTextures.Length) continue;
-                int tile = ObjectTextures[ti].TileAndFlag & 0x7FFF;
-                if (tile < maxDiffuseTile) usedTiles.Add(tile);
+                if (ti >= 0 && ti < ObjectTextures.Length)
+                    usedTiles.Add(ObjectTextures[ti].TileAndFlag & 0x7FFF);
             }
         }
 
@@ -1309,7 +1303,10 @@ public class TrLevel : IDisposable
 
     private void BuildPrjTextureTable(TrProject p, Dictionary<int, int> tileRemap)
     {
-        int count = Math.Min(ObjectTextures.Length, 1024);
+        // No 1024 cap: see the BlockTex.Index field comment -- this project does not round-trip
+        // through the classic-PRJ on-disk 10-bit texture-index format, so its 1024-entry ceiling
+        // does not apply here.
+        int count = ObjectTextures.Length;
         p.NumTextures = (uint)count;
         p.Textures = new TexInfo[count];
         for (int i = 0; i < count; i++)
@@ -1360,12 +1357,12 @@ public class TrLevel : IDisposable
         return (start, end);
     }
 
-    private static void ApplyRoomMeshTextures(PrjRoom prjRoom, LevelRoom levelRoom, ObjectTexture[] objectTextures, int maxDiffuseTile)
+    private static void ApplyRoomMeshTextures(PrjRoom prjRoom, LevelRoom levelRoom, ObjectTexture[] objectTextures)
     {
         foreach (var face in levelRoom.Rectangles)
-            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures, maxDiffuseTile);
+            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures);
         foreach (var face in levelRoom.Triangles)
-            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures, maxDiffuseTile);
+            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures);
     }
 
     /// <summary>
@@ -1376,21 +1373,11 @@ public class TrLevel : IDisposable
     /// previous Z-major indexing here (b = z*XSize + x) silently wrote to the wrong block whenever
     /// a room wasn't square (NumX != NumZ).
     /// </summary>
-    private static void ApplyRoomFaceTexture(PrjRoom prjRoom, LevelRoom levelRoom, RoomFace face, ObjectTexture[] objectTextures, int maxDiffuseTile)
+    private static void ApplyRoomFaceTexture(PrjRoom prjRoom, LevelRoom levelRoom, RoomFace face, ObjectTexture[] objectTextures)
     {
         int textureIndex = face.Texture & 0x7FFF;
-        // Skip faces referencing the bump-map tile range (see BuildRoomTextureAtlas): that data
-        // isn''t a real diffuse colour texture, so nothing valid could be written here anyway.
-        if (textureIndex >= 0 && textureIndex < objectTextures.Length &&
-            (objectTextures[textureIndex].TileAndFlag & 0x7FFF) >= maxDiffuseTile)
-            return;
-        // NOTE: the classic-PRJ BlockTex format only has 10 bits for the texture index (max 1024
-        // textures), a real limit of that format -- but we don't reject on it here anymore. This
-        // level alone has 2692 object textures with every single room face referencing an index
-        // past 1023, so rejecting those would silently classify zero faces. The real fix is writing
-        // directly to TombLib's Sector.SetFaceTexture/TextureArea (no such limit) instead of routing
-        // through this classic-PRJ intermediate; until then, SetBlockTexture below will truncate/wrap
-        // indices above 1023, which is a known, temporary correctness gap in the classic-PRJ path only.
+        // BlockTex.Index is now a full int (see its field comment), so no artificial 1024-entry
+        // ceiling here beyond the real bounds check against objectTextures itself.
         if (textureIndex < 0 || textureIndex >= objectTextures.Length) return;
         var vertices = face.Vertices
             .Where(v => v < levelRoom.Vertices.Length)
@@ -1644,8 +1631,10 @@ public class TrLevel : IDisposable
     private static void SetBlockTexture(BlockTex blockTex, int textureIndex, RoomFace face, ObjectTexture texture)
     {
         blockTex.Tipo = 0x0007;
-        blockTex.Index = (byte)(textureIndex & 0xFF);
-        blockTex.Flags1 = (byte)((textureIndex >> 8) & 0x03);
+        // No more 8/10-bit packing here -- see the BlockTex.Index field comment. Flags1 no longer
+        // carries any part of the index; its low bits are simply left at 0 (unused) below, with
+        // 0x04/0x08/0x80 still used for DoubleSided/BlendMode/flip exactly as before.
+        blockTex.Index = textureIndex;
         if ((face.Texture & 0x8000) != 0)
             blockTex.Flags1 |= 0x04;
         // Attribute: 0 = opaque, 1 = alpha-tested, 2 = additive (TRosettaStone tr4_object_texture).

@@ -766,4 +766,99 @@ foreach (var r in perRoomErr.OrderByDescending(r => r.err).Take(15))
         Console.WriteLine($"  portal neighbors: {string.Join(",", neighbors)}");
     }
 }
+
+// Check NewFlags bump-mapping bits (9-10) for ObjectTextures referencing tile >= NumRoomTextiles+NumObjTextiles.
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Bump-flag check on high-tile ObjectTextures ---");
+    int maxDiffuse = level.NumRoomTextiles + level.NumObjTextiles;
+    Console.WriteLine($"maxDiffuse (NumRoomTextiles+NumObjTextiles) = {maxDiffuse}");
+    var highTileTexIndices = new List<int>();
+    for (int i = 0; i < level.ObjectTextures.Length; i++)
+    {
+        int tile = level.ObjectTextures[i].TileAndFlag & 0x7FFF;
+        if (tile >= maxDiffuse) highTileTexIndices.Add(i);
+    }
+    Console.WriteLine($"ObjectTextures with tile >= maxDiffuse: {highTileTexIndices.Count}");
+    foreach (var idx in highTileTexIndices.Take(15))
+    {
+        var t = level.ObjectTextures[idx];
+        int tile = t.TileAndFlag & 0x7FFF;
+        int bumpLevel = (t.NewFlags >> 9) & 0x3;
+        Console.WriteLine($"  ObjTex[{idx}]: tile={tile} NewFlags=0x{t.NewFlags:X4} bumpLevel={bumpLevel} Attribute={t.Attribute}");
+    }
+}
+
+// Dump the raw "bump region" of TextureBitmap as PNG for visual inspection.
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Dumping bump-region pixels as PNG ---");
+    int maxDiffuse = level.NumRoomTextiles + level.NumObjTextiles;
+    int bumpRows = level.TextureBitmap.PixelHeight - maxDiffuse * 256;
+    Console.WriteLine($"Bump region: rows [{maxDiffuse * 256}, {level.TextureBitmap.PixelHeight}) = {bumpRows} rows tall, {bumpRows / 256.0:F2} tiles");
+
+    if (bumpRows > 0)
+    {
+        var cropped = new System.Windows.Media.Imaging.CroppedBitmap(level.TextureBitmap,
+            new System.Windows.Int32Rect(0, maxDiffuse * 256, 256, bumpRows));
+        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(cropped));
+        using var fs = new System.IO.FileStream(@"C:\Users\Checkm8ra1n\Documents\bump_region_dump.png", System.IO.FileMode.Create);
+        encoder.Save(fs);
+        Console.WriteLine("Saved: C:\\Users\\Checkm8ra1n\\Documents\\bump_region_dump.png");
+    }
+
+    // Also dump the full atlas (room+obj+bump) for reference / comparison.
+    var encoder2 = new System.Windows.Media.Imaging.PngBitmapEncoder();
+    encoder2.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(level.TextureBitmap));
+    using var fs2 = new System.IO.FileStream(@"C:\Users\Checkm8ra1n\Documents\full_atlas_dump.png", System.IO.FileMode.Create);
+    encoder2.Save(fs2);
+    Console.WriteLine("Saved: C:\\Users\\Checkm8ra1n\\Documents\\full_atlas_dump.png");
+}
+
+// Check actual Right/Bottom (width/height) values for room-face textures -- should be ~63-64 for
+// a full 4-click (1024 unit) face at standard 16px/click density; if they cluster much smaller
+// (e.g. ~12-13), that confirms a UV width/height computation bug.
+{
+    Console.WriteLine();
+    Console.WriteLine("--- TexInfo Right/Bottom sanity check for room-face textures ---");
+    var usedTexIndices = new SortedSet<int>();
+    foreach (var room in level.Rooms)
+    {
+        foreach (var f in room.Rectangles.Concat(room.Triangles))
+        {
+            int ti = f.Texture & 0x7FFF;
+            if (ti >= 0 && ti < level.ObjectTextures.Length) usedTexIndices.Add(ti);
+        }
+    }
+    var prj2 = level.ConvertToPrj(@"C:\Users\Checkm8ra1n\Documents\alexhub2_dummy.prj2", saveTga: false);
+    var rightHisto = new SortedDictionary<int,int>();
+    var bottomHisto = new SortedDictionary<int,int>();
+    int outOfTableCount = 0;
+    foreach (var ti in usedTexIndices)
+    {
+        if (ti >= prj2.Textures.Length) { outOfTableCount++; continue; }
+        var t = prj2.Textures[ti];
+        rightHisto.TryGetValue(t.Right, out int rc); rightHisto[t.Right] = rc + 1;
+        bottomHisto.TryGetValue(t.Bottom, out int bc); bottomHisto[t.Bottom] = bc + 1;
+    }
+    Console.WriteLine($"NumTextures in prj2.Textures table: {prj2.Textures.Length} (ObjectTextures.Length={level.ObjectTextures.Length})");
+    Console.WriteLine($"Room-face texture indices BEYOND the 1024-entry table: {outOfTableCount} / {usedTexIndices.Count}");
+    Console.WriteLine($"Distinct texture indices used by room faces: {usedTexIndices.Count}");
+    Console.WriteLine("Right (width) histogram:");
+    foreach (var kv in rightHisto.Take(20)) Console.WriteLine($"  Right={kv.Key,3}: {kv.Value}");
+    Console.WriteLine("Bottom (height) histogram:");
+    foreach (var kv in bottomHisto.Take(20)) Console.WriteLine($"  Bottom={kv.Key,3}: {kv.Value}");
+
+    // Sample raw ObjectTexture vertex data for a couple of room-face textures.
+    Console.WriteLine();
+    Console.WriteLine("Sample raw ObjectTexture vertices for first 5 room-face texture indices:");
+    foreach (var ti in usedTexIndices.Take(5))
+    {
+        var ot = level.ObjectTextures[ti];
+        Console.WriteLine($"  ObjTex[{ti}]: tile={ot.TileAndFlag & 0x7FFF}");
+        foreach (var v in ot.Vertices)
+            Console.WriteLine($"    raw X=0x{v.X:X4} ({v.X}) -> hiByte={v.X>>8} loByte={v.X&0xFF} | raw Y=0x{v.Y:X4} ({v.Y}) -> hiByte={v.Y>>8} loByte={v.Y&0xFF}");
+    }
+}
 return 0;

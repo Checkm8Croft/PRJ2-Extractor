@@ -1,4 +1,4 @@
-namespace PRJ2_Extractor.Models;
+﻿namespace PRJ2_Extractor.Models;
 
 public class Color4
 {
@@ -50,7 +50,14 @@ public class Door
 public class BlockTex
 {
     public ushort Tipo;
-    public byte Index;
+    // Widened from byte to int: the classic-PRJ on-disk format packs this into 8 bits (plus 2 more
+    // borrowed from Flags1, for a 10-bit/1024 ceiling), but this project no longer round-trips
+    // through that on-disk representation for texture data -- Prj2Exporter reads this field to
+    // build a modern TombLib TextureArea directly (no 10-bit limit there). Keeping it byte-sized
+    // silently truncated/wrapped every texture index above 1023, which for TombLib-compiled levels
+    // (routinely thousands of ObjectTextures) corrupted effectively all room-face texture
+    // assignments (verified: alexhub2 has 656/656 distinct room-face texture indices > 1023).
+    public int Index;
     public byte Flags1, Rotation, Triangle;
     public ushort Filler;
 }
