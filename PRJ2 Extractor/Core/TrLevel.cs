@@ -1321,10 +1321,21 @@ public class TrLevel : IDisposable
         // selection is driven by real room-face geometry, not by iterating this table), so this
         // TexInfo entry is simply never consulted; the 0 fallback is inert dead data, not a bug.
         int newTile = tileRemap.TryGetValue(tile, out int nt) ? nt : 0;
-        int minX = texture.Vertices.Min(v => v.X >> 8);
-        int maxX = texture.Vertices.Max(v => v.X >> 8);
-        int minY = texture.Vertices.Min(v => v.Y >> 8);
-        int maxY = texture.Vertices.Max(v => v.Y >> 8);
+        // Bit 15 of NewFlags marks "this texture is used on a triangle face" (verified against
+        // TRosettaStone's miscellany.asc, tr4_object_texture NewFlags bit list). When set, only
+        // Vertices[0..2] are the real triangle corners; Vertices[3] is not reliably a duplicate of
+        // Vertices[2] in TombLib-compiled files and can hold an unrelated value (verified: a real
+        // case in alexhub2 had Vertices[0..2] forming a tight, correct 64x64-ish triangle while
+        // Vertices[3] was a distant outlier, inflating the naive 4-vertex bounding box to ~2x the
+        // real size and stretching the rendered texture -- exactly the "texture bigger than 64x64"
+        // symptom reported in Tomb Editor). Excluding Vertices[3] for triangle-flagged textures
+        // fixes this at the source rather than guessing from vertex duplication patterns.
+        bool isTriangleTexture = (texture.NewFlags & 0x8000) != 0;
+        var relevantVertices = isTriangleTexture ? texture.Vertices.Take(3) : texture.Vertices;
+        int minX = relevantVertices.Min(v => v.X >> 8);
+        int maxX = relevantVertices.Max(v => v.X >> 8);
+        int minY = relevantVertices.Min(v => v.Y >> 8);
+        int maxY = relevantVertices.Max(v => v.Y >> 8);
 
         minX = Math.Clamp(minX, 0, 255);
         maxX = Math.Clamp(maxX, minX, 255);
@@ -1359,10 +1370,59 @@ public class TrLevel : IDisposable
 
     private static void ApplyRoomMeshTextures(PrjRoom prjRoom, LevelRoom levelRoom, ObjectTexture[] objectTextures)
     {
+        // Seam key (ownX, ownZ, isXDirection) -> quads awaiting rank-based tier assignment (see
+        // FlushUnreliableWallSeams). Only used for the "unreliable neighbor" case (border/solid-rock
+        // walls) -- reliable-neighbor walls still classify and write immediately as before.
+        var pending = new Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>>();
+
         foreach (var face in levelRoom.Rectangles)
-            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures);
+            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures, pending);
         foreach (var face in levelRoom.Triangles)
-            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures);
+            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures, pending);
+
+        FlushUnreliableWallSeams(prjRoom, objectTextures, pending);
+    }
+
+    /// <summary>
+    /// Assigns QA/Middle/WS tiers to the wall quads accumulated for "unreliable neighbor" seams
+    /// (border/solid-rock walls, where the neighbor sector's Floor/Ceiling carry no real geometric
+    /// meaning -- see IsBorderOrSolid) by RANK among the real compiled quads at that exact seam,
+    /// instead of a fixed-fraction split of own's own span. Replaces an earlier "top/bottom sixth of
+    /// own's span" heuristic: measured on alexhub2, 84.4% of these seams have at most 3 real compiled
+    /// quads, which map naturally onto QA/Middle/WS by position (closest-to-floor / closest-to-
+    /// ceiling / everything else) -- using the quads' own real Y-boundaries instead of an arbitrary
+    /// fraction. Seams with more than 3 quads still can't be fully represented (same structural
+    /// limit as Floor2/Ceiling2 -- see DOCUMENTATION.md); extra quads beyond the first/last collapse
+    /// into Middle exactly as the old heuristic would, but the QA/WS boundary itself is now exact
+    /// rather than approximate.
+    /// avgY convention: raw TR Y is positive-down, so the LARGEST avgY among a seam's quads is
+    /// physically closest to the floor (-> QA) and the SMALLEST is closest to the ceiling (-> WS).
+    /// </summary>
+    private static void FlushUnreliableWallSeams(PrjRoom prjRoom, ObjectTexture[] objectTextures,
+        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>> pending)
+    {
+        foreach (var ((ownX, ownZ, isXDirection), quads) in pending)
+        {
+            int target = ownX * prjRoom.ZSize + ownZ;
+            if (target < 0 || target >= prjRoom.Blocks.Length) continue;
+
+            int qaSlot = isXDirection ? 2 : 5;
+            int middleSlot = isXDirection ? 4 : 7;
+            int wsSlot = isXDirection ? 3 : 6;
+
+            var sorted = quads.OrderByDescending(q => q.avgY).ToList();
+            for (int i = 0; i < sorted.Count; i++)
+            {
+                int slot;
+                if (sorted.Count == 1) slot = middleSlot; // can't tell tier from a single isolated quad
+                else if (i == 0) slot = qaSlot;                    // closest to floor
+                else if (i == sorted.Count - 1) slot = wsSlot;     // closest to ceiling
+                else slot = middleSlot;
+
+                var (_, textureIndex, face) = sorted[i];
+                SetBlockTexture(prjRoom.Blocks[target].Textures[slot], textureIndex, face, objectTextures[textureIndex]);
+            }
+        }
     }
 
     /// <summary>
@@ -1373,7 +1433,8 @@ public class TrLevel : IDisposable
     /// previous Z-major indexing here (b = z*XSize + x) silently wrote to the wrong block whenever
     /// a room wasn't square (NumX != NumZ).
     /// </summary>
-    private static void ApplyRoomFaceTexture(PrjRoom prjRoom, LevelRoom levelRoom, RoomFace face, ObjectTexture[] objectTextures)
+    private static void ApplyRoomFaceTexture(PrjRoom prjRoom, LevelRoom levelRoom, RoomFace face, ObjectTexture[] objectTextures,
+        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>> pending)
     {
         int textureIndex = face.Texture & 0x7FFF;
         // BlockTex.Index is now a full int (see its field comment), so no artificial 1024-entry
@@ -1394,9 +1455,21 @@ public class TrLevel : IDisposable
 
         const int epsilon = 8;
 
-        if (Math.Abs(maxY - minY) <= epsilon)
+        bool looksLikeXWall = Math.Abs(maxX - minX) <= epsilon;
+        bool looksLikeZWall = Math.Abs(maxZ - minZ) <= epsilon;
+
+        if (!looksLikeXWall && !looksLikeZWall)
         {
-            // Floor/ceiling: assign to every sector the merged face's bounding box covers.
+            // Floor/ceiling, flat OR sloped: large extent in both X and Z. Previously this branch
+            // required near-zero Y variance (Math.Abs(maxY - minY) <= epsilon), which correctly
+            // caught flat floors/ceilings but silently DROPPED sloped ones entirely -- a tilted
+            // floor/ceiling face (Tilt/Roof FloorData) has large X and Z extent (so it fails both
+            // wall checks below) but also varies in Y (so it failed the old flat-Y gate too),
+            // meaning it matched NONE of the method's branches and got no texture at all. Gating on
+            // "not a wall" instead of "is flat" catches both cases uniformly. Classification uses
+            // each covered sector's real per-corner floor/ceiling reference (GetAvgCornerFloorY/
+            // CeilY) rather than a flat scalar -- for a genuinely flat sector this reduces to
+            // exactly the same value as before (FloorCorner/CeilCorner are all zero there).
             var (bx0, bx1) = BlockRange(minX, maxX, prjRoom.XSize);
             var (bz0, bz1) = BlockRange(minZ, maxZ, prjRoom.ZSize);
             for (int bx = bx0; bx <= bx1; bx++)
@@ -1405,12 +1478,34 @@ public class TrLevel : IDisposable
                 int target = bx * prjRoom.ZSize + bz;
                 if (target < 0 || target >= prjRoom.Blocks.Length) continue;
 
-                int floorY = -prjRoom.Blocks[target].Floor * 256;
-                int ceilingY = -prjRoom.Blocks[target].Ceiling * 256;
-                int slot = Math.Abs(avgY - floorY) <= Math.Abs(avgY - ceilingY)
-                    ? (face.IsTriangle ? 8 : 0)
-                    : (face.IsTriangle ? 9 : 1);
-                SetBlockTexture(prjRoom.Blocks[target].Textures[slot], textureIndex, face, objectTextures[textureIndex]);
+                var targetBlock = prjRoom.Blocks[target];
+                int floorY = GetAvgCornerFloorY(targetBlock);
+                int ceilingY = GetAvgCornerCeilY(targetBlock);
+                int primarySlot = Math.Abs(avgY - floorY) <= Math.Abs(avgY - ceilingY) ? 0 : 1;
+                int slot;
+                if (!face.IsTriangle)
+                {
+                    slot = primarySlot;
+                }
+                else
+                {
+                    // A triangular face here could be (a) naturally-triangular partial coverage
+                    // (e.g. a diagonal room boundary) with no sibling -- belongs in the primary
+                    // Floor/Ceiling slot exactly like a rectangle would, or (b) one half of a
+                    // genuine two-triangle diagonal SPLIT with a DIFFERENT texture per triangle --
+                    // only case (b) should use the Floor_Triangle2/Ceiling_Triangle2 slot. Routing
+                    // every triangle to the Triangle2 slot unconditionally (an earlier version of
+                    // this code) left the primary Floor/Ceiling slot empty for any sector whose
+                    // floor/ceiling happened to be triangulated without a real split -- confirmed as
+                    // a real, common cause of missing Floor coverage (see DOCUMENTATION.md).
+                    // Distinguish by whether the primary slot is already occupied by a DIFFERENT
+                    // texture: if so, this is genuinely the second half of a split; otherwise this
+                    // is the first (or only) triangle and belongs in the primary slot.
+                    var existing = targetBlock.Textures[primarySlot];
+                    bool primaryOccupiedByDifferentTexture = existing.Tipo == 0x0007 && existing.Index != textureIndex;
+                    slot = primaryOccupiedByDifferentTexture ? (primarySlot == 0 ? 8 : 9) : primarySlot;
+                }
+                SetBlockTexture(targetBlock.Textures[slot], textureIndex, face, objectTextures[textureIndex]);
             }
             return;
         }
@@ -1425,7 +1520,7 @@ public class TrLevel : IDisposable
         // ever encodes one floor split and one ceiling split per sector, so a second stacked tier on
         // the same side can't occur in compiled TR4 data. As with floor/ceiling, a merged wall face
         // can span several sectors along its free axis, so we assign to every sector it covers.
-        if (Math.Abs(maxX - minX) <= epsilon)
+        if (looksLikeXWall)
         {
             int seamX = (int)Math.Round(avgX / 1024.0);
             bool isInteriorSeam = seamX > 0 && seamX < prjRoom.XSize;
@@ -1436,12 +1531,12 @@ public class TrLevel : IDisposable
             {
                 bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, neighborX, bz);
                 ApplyWallFace(prjRoom, ownX, bz, neighborX, bz, avgY, textureIndex, face, objectTextures,
-                    qaSlot: 2, middleSlot: 4, wsSlot: 3, neighborUnreliable);
+                    qaSlot: 2, middleSlot: 4, wsSlot: 3, neighborUnreliable, pending);
             }
             return;
         }
 
-        if (Math.Abs(maxZ - minZ) <= epsilon)
+        if (looksLikeZWall)
         {
             int seamZ = (int)Math.Round(avgZ / 1024.0);
             bool isInteriorSeam = seamZ > 0 && seamZ < prjRoom.ZSize;
@@ -1452,7 +1547,7 @@ public class TrLevel : IDisposable
             {
                 bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, bx, neighborZ);
                 ApplyWallFace(prjRoom, bx, ownZ, bx, neighborZ, avgY, textureIndex, face, objectTextures,
-                    qaSlot: 5, middleSlot: 7, wsSlot: 6, neighborUnreliable);
+                    qaSlot: 5, middleSlot: 7, wsSlot: 6, neighborUnreliable, pending);
             }
         }
     }
@@ -1486,7 +1581,15 @@ public class TrLevel : IDisposable
     private static int GetCornerFloorY(Block block, bool xp, bool zp)
     {
         int idx = (xp, zp) switch { (true, false) => 0, (false, false) => 1, (false, true) => 2, (true, true) => 3 };
-        return -(block.Floor + block.FloorCorner[idx]) * 256;
+        // SUBTRACT FloorCorner (not add): verified against the already-validated geometry path in
+        // Prj2Exporter.cs (`floorBase - block.FloorCorner[i]`), and confirmed empirically -- a real
+        // compiled quad on a tilted sector (room2 sector(1,3)) had Yrange=[-5120,-4608], with
+        // FloorCorner=0 corners correctly landing on -5120 either way, but the previous "+" sign put
+        // FloorCorner=2 corners at -5632 (impossibly higher than even the flat reference), when they
+        // should land at -4608 (the quad's real, lower extreme) -- only "-" gives that. This function
+        // is shared by wall QA/WS classification and floor/ceiling classification; the wrong sign was
+        // silently degrading both for any sector with a genuinely tilted floor.
+        return -(block.Floor - block.FloorCorner[idx]) * 256;
     }
 
     /// <summary>
@@ -1499,6 +1602,21 @@ public class TrLevel : IDisposable
         int idx = (xp, zp) switch { (true, true) => 0, (false, true) => 1, (false, false) => 2, (true, false) => 3 };
         return -(block.Ceiling + block.CeilCorner[idx]) * 256;
     }
+
+    /// <summary>
+    /// Average of a block's 4 real corner floor heights. For a genuinely flat sector (FloorCorner
+    /// all zero) this reduces to exactly the same value as the old flat -Block.Floor*256 scalar; for
+    /// a tilted/sloped sector (Tilt/Roof/Split FloorData) it correctly reflects the real average
+    /// height instead of the pre-slope reference point, which is what floor/ceiling face
+    /// classification below needs.
+    /// </summary>
+    private static int GetAvgCornerFloorY(Block block) =>
+        (GetCornerFloorY(block, false, false) + GetCornerFloorY(block, true, false) +
+         GetCornerFloorY(block, false, true) + GetCornerFloorY(block, true, true)) / 4;
+
+    private static int GetAvgCornerCeilY(Block block) =>
+        (GetCornerCeilY(block, false, false) + GetCornerCeilY(block, true, false) +
+         GetCornerCeilY(block, false, true) + GetCornerCeilY(block, true, true)) / 4;
 
     /// <summary>
     /// Writes a wall face's texture into the "owning" block's QA/Middle/WS slot. (ownX,ownZ) is the
@@ -1516,7 +1634,8 @@ public class TrLevel : IDisposable
     /// </summary>
     private static void ApplyWallFace(PrjRoom prjRoom, int ownX, int ownZ, int neighborX, int neighborZ, int avgY,
         int textureIndex, RoomFace face, ObjectTexture[] objectTextures, int qaSlot, int middleSlot, int wsSlot,
-        bool neighborUnreliable = false)
+        bool neighborUnreliable,
+        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>> pending)
     {
         int ownTarget = ownX * prjRoom.ZSize + ownZ;
         if (ownTarget < 0 || ownTarget >= prjRoom.Blocks.Length) return;
@@ -1524,34 +1643,17 @@ public class TrLevel : IDisposable
         int slot = middleSlot; // default: full-height wall (room edge, or no floor/ceiling mismatch found)
         bool hasNeighbor = neighborX >= 0 && neighborZ >= 0 && neighborX < prjRoom.XSize && neighborZ < prjRoom.ZSize;
 
+
         if (hasNeighbor && neighborUnreliable)
         {
-            var ownBlock0 = prjRoom.Blocks[ownTarget];
+            // Defer to FlushUnreliableWallSeams: collect this quad alongside every other real
+            // compiled quad at the same seam, then assign QA/Middle/WS by RANK once all of them
+            // are known, instead of guessing from a fixed fraction of own's own span in isolation.
             bool isXDirection0 = qaSlot == 2;
-            int ofA, ofB, ocA, ocB;
-            if (isXDirection0)
-            {
-                ofA = GetCornerFloorY(ownBlock0, xp: false, zp: false);
-                ofB = GetCornerFloorY(ownBlock0, xp: false, zp: true);
-                ocA = GetCornerCeilY(ownBlock0, xp: false, zp: false);
-                ocB = GetCornerCeilY(ownBlock0, xp: false, zp: true);
-            }
-            else
-            {
-                ofA = GetCornerFloorY(ownBlock0, xp: false, zp: false);
-                ofB = GetCornerFloorY(ownBlock0, xp: true, zp: false);
-                ocA = GetCornerCeilY(ownBlock0, xp: false, zp: false);
-                ocB = GetCornerCeilY(ownBlock0, xp: true, zp: false);
-            }
-            int floorBottom = Math.Max(ofA, ofB);
-            int ceilTop = Math.Min(ocA, ocB);
-            int span = floorBottom - ceilTop;
-            if (span > 0)
-            {
-                int sixth = span / 6;
-                if (avgY >= floorBottom - sixth) slot = qaSlot;
-                else if (avgY <= ceilTop + sixth) slot = wsSlot;
-            }
+            var key = (ownX, ownZ, isXDirection0);
+            if (!pending.TryGetValue(key, out var list)) pending[key] = list = new List<(int, int, RoomFace)>();
+            list.Add((avgY, textureIndex, face));
+            return;
         }
         else if (hasNeighbor)
         {

@@ -861,4 +861,644 @@ foreach (var r in perRoomErr.OrderByDescending(r => r.err).Take(15))
             Console.WriteLine($"    raw X=0x{v.X:X4} ({v.X}) -> hiByte={v.X>>8} loByte={v.X&0xFF} | raw Y=0x{v.Y:X4} ({v.Y}) -> hiByte={v.Y>>8} loByte={v.Y&0xFF}");
     }
 }
+
+// Quantify empty (untextured) sector faces across the whole exported level vs the reference.
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Empty-face quantification: our export vs reference ---");
+    var settings3 = new Prj2Loader.Settings();
+    var outPath2 = @"C:\Users\Checkm8ra1n\Documents\alexhub2_export_test.prj2";
+    var ourLevel = Prj2Loader.LoadFromPrj2(outPath2, null, CancellationToken.None, settings3);
+
+    int ourTotalFaces = 0, ourTexturedFaces = 0;
+    for (int i = 0; i < ourLevel.Rooms.Length; i++)
+    {
+        var room = ourLevel.Rooms[i];
+        if (room == null) continue;
+        for (int x = 0; x < room.NumXSectors; x++)
+        for (int z = 0; z < room.NumZSectors; z++)
+        {
+            foreach (SectorFace face in room.Sectors[x, z].GetFaceTextures().Keys.ToList())
+            {
+                ourTotalFaces++;
+                if (!room.Sectors[x, z].GetFaceTextures()[face].TextureIsUnavailable) ourTexturedFaces++;
+            }
+        }
+    }
+
+    int refTotalFaces = 0;
+    for (int i = 0; i < refRooms.Count; i++)
+    {
+        var room = refRooms[i];
+        for (int x = 0; x < room.NumXSectors; x++)
+        for (int z = 0; z < room.NumZSectors; z++)
+            refTotalFaces += room.Sectors[x, z].GetFaceTextures().Count;
+    }
+
+    Console.WriteLine($"Our export: {ourTexturedFaces} textured / {ourTotalFaces} sector-face entries with SOME texture-having geometry");
+    Console.WriteLine($"Reference (orig): {refTotalFaces} sector-face texture entries total");
+    Console.WriteLine($"Coverage ratio: {100.0 * ourTexturedFaces / Math.Max(1, refTotalFaces):F1}% of reference's face count is textured in ours");
+
+    // Breakdown by SectorFace type: ours (textured count) vs reference (total count).
+    var ourByType = new Dictionary<string,int>();
+    for (int i = 0; i < ourLevel.Rooms.Length; i++)
+    {
+        var room = ourLevel.Rooms[i];
+        if (room == null) continue;
+        for (int x = 0; x < room.NumXSectors; x++)
+        for (int z = 0; z < room.NumZSectors; z++)
+        foreach (var kv in room.Sectors[x, z].GetFaceTextures())
+        {
+            if (kv.Value.TextureIsUnavailable) continue;
+            var k = kv.Key.ToString();
+            ourByType.TryGetValue(k, out int c); ourByType[k] = c + 1;
+        }
+    }
+    var refByType = new Dictionary<string,int>();
+    foreach (var room in refRooms)
+    for (int x = 0; x < room.NumXSectors; x++)
+    for (int z = 0; z < room.NumZSectors; z++)
+    foreach (var kv in room.Sectors[x, z].GetFaceTextures())
+    {
+        var k = kv.Key.ToString();
+        refByType.TryGetValue(k, out int c); refByType[k] = c + 1;
+    }
+    Console.WriteLine();
+    Console.WriteLine("--- Coverage by SectorFace type (ours / reference) ---");
+    foreach (var k in refByType.Keys.OrderByDescending(k => refByType[k]))
+    {
+        ourByType.TryGetValue(k, out int ours);
+        int refc = refByType[k];
+        Console.WriteLine($"  {k,-24}: {ours,5} / {refc,5}  ({100.0*ours/Math.Max(1,refc):F1}%)");
+    }
+}
+
+// Investigate Floor2/Ceiling2: find real occurrences in the reference and inspect the corresponding
+// raw TR4 sector/FloorData to see if there's a derivable signal we're not parsing.
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Floor2/Ceiling2 investigation ---");
+    var floor2Faces = new HashSet<SectorFace> {
+        SectorFace.Wall_NegativeX_Floor2, SectorFace.Wall_PositiveX_Floor2,
+        SectorFace.Wall_NegativeZ_Floor2, SectorFace.Wall_PositiveZ_Floor2,
+        SectorFace.Wall_NegativeX_Ceiling2, SectorFace.Wall_PositiveX_Ceiling2,
+        SectorFace.Wall_NegativeZ_Ceiling2, SectorFace.Wall_PositiveZ_Ceiling2,
+    };
+
+    int found = 0;
+    for (int ri = 0; ri < refRooms.Count && found < 8; ri++)
+    {
+        var refRoom = refRooms[ri];
+        var r1 = level.Rooms.FirstOrDefault(rr => Math.Abs(rr.X - refRoom.Position.X * 1024) < 1100 && Math.Abs(rr.Z - refRoom.Position.Z * 1024) < 1100);
+        if (r1 == null) continue;
+        int roomIdx = Array.IndexOf(level.Rooms, r1);
+
+        for (int x = 0; x < refRoom.NumXSectors && found < 8; x++)
+        for (int z = 0; z < refRoom.NumZSectors && found < 8; z++)
+        {
+            var faces = refRoom.Sectors[x, z].GetFaceTextures();
+            foreach (var face in faces.Keys)
+            {
+                if (!floor2Faces.Contains(face)) continue;
+                found++;
+                Console.WriteLine();
+                Console.WriteLine($"Found {face} at refRoom[{ri}] (our room idx {roomIdx}) sector ({x},{z})");
+
+                int idx = x * r1.NumZ + z;
+                if (idx < 0 || idx >= r1.Sectors.Length) { Console.WriteLine("  (sector index out of range in our raw data)"); continue; }
+                var sec = r1.Sectors[idx];
+                Console.WriteLine($"  Raw sector: Floor={sec.Floor} Ceiling={sec.Ceiling} RoomAbove={sec.RoomAbove} RoomBelow={sec.RoomBelow} HasFd={sec.HasFd}");
+                if (sec.FloorInfo != null)
+                {
+                    foreach (var fd in sec.FloorInfo)
+                    {
+                        Console.WriteLine($"    FloorData: Tipo={fd.Tipo} TriHLo={fd.TriHLo} TriHHi={fd.TriHHi} Corners=[{string.Join(",", fd.Corners)}] AddX={fd.AddX} AddZ={fd.AddZ}");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("    (no FloorData at all)");
+                }
+
+                // Also check the sector on the relevant side (neighbor) since Floor2/Ceiling2 is a
+                // wall-tier face, same as QA/Middle/WS -- print immediate neighbors' raw data too.
+                foreach (var (dx, dz, label) in new[] { (-1,0,"x-1"), (1,0,"x+1"), (0,-1,"z-1"), (0,1,"z+1") })
+                {
+                    int nx = x + dx, nz = z + dz;
+                    if (nx < 0 || nz < 0 || nx >= r1.NumX || nz >= r1.NumZ) continue;
+                    int nidx = nx * r1.NumZ + nz;
+                    var nsec = r1.Sectors[nidx];
+                    Console.WriteLine($"  Neighbor {label} ({nx},{nz}): Floor={nsec.Floor} Ceiling={nsec.Ceiling} HasFd={nsec.HasFd}");
+                    if (nsec.FloorInfo != null)
+                        foreach (var fd in nsec.FloorInfo)
+                            Console.WriteLine($"      FloorData: Tipo={fd.Tipo} TriHLo={fd.TriHLo} TriHHi={fd.TriHHi} Corners=[{string.Join(",", fd.Corners)}]");
+                }
+            }
+        }
+    }
+    Console.WriteLine();
+    Console.WriteLine($"Total Floor2/Ceiling2 instances inspected: {found}");
+}
+
+// Test hypothesis: Floor2/Ceiling2 correspond to EXTRA real compiled quads at a seam (beyond what
+// our 3-tier QA/Middle/WS classification captures), not hidden FloorData.
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Floor2/Ceiling2 vs real compiled quad count at the seam ---");
+    var floor2Faces = new HashSet<SectorFace> {
+        SectorFace.Wall_NegativeX_Floor2, SectorFace.Wall_PositiveX_Floor2,
+        SectorFace.Wall_NegativeZ_Floor2, SectorFace.Wall_PositiveZ_Floor2,
+        SectorFace.Wall_NegativeX_Ceiling2, SectorFace.Wall_PositiveX_Ceiling2,
+        SectorFace.Wall_NegativeZ_Ceiling2, SectorFace.Wall_PositiveZ_Ceiling2,
+    };
+
+    int found = 0;
+    var quadCounts = new List<int>();
+    for (int ri = 0; ri < refRooms.Count; ri++)
+    {
+        var refRoom = refRooms[ri];
+        var r1 = level.Rooms.FirstOrDefault(rr => Math.Abs(rr.X - refRoom.Position.X * 1024) < 1100 && Math.Abs(rr.Z - refRoom.Position.Z * 1024) < 1100);
+        if (r1 == null) continue;
+
+        for (int x = 0; x < refRoom.NumXSectors; x++)
+        for (int z = 0; z < refRoom.NumZSectors; z++)
+        {
+            var faces = refRoom.Sectors[x, z].GetFaceTextures();
+            bool hasF2C2 = faces.Keys.Any(floor2Faces.Contains);
+            if (!hasF2C2) continue;
+            found++;
+
+            // Count real compiled quads (rectangles+triangles) near this seam, X-direction (seam
+            // between block x-1 and x, at world X = x*1024 relative to room origin).
+            int seamWorldX = x * 1024;
+            int zLo = z * 1024, zHi = (z + 1) * 1024;
+            int count = 0;
+            foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+            {
+                var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+                int avgX = (int)verts.Average(v => (int)v.X);
+                int avgZ = (int)verts.Average(v => (int)v.Z);
+                int minX = verts.Min(v => (int)v.X), maxX = verts.Max(v => (int)v.X);
+                bool nearSeam = Math.Abs(avgX - seamWorldX) < 64 && Math.Abs(maxX - minX) < 64;
+                if (nearSeam && avgZ >= zLo - 64 && avgZ <= zHi + 64) count++;
+            }
+            quadCounts.Add(count);
+            if (found <= 15)
+                Console.WriteLine($"  refRoom[{ri}] sector({x},{z}): real compiled quads near X-seam = {count}");
+        }
+    }
+    Console.WriteLine();
+    Console.WriteLine($"Total Floor2/Ceiling2-bearing sectors checked: {found}");
+    if (quadCounts.Count > 0)
+    {
+        var histo = quadCounts.GroupBy(c => c).OrderBy(g => g.Key);
+        Console.WriteLine("Quad-count histogram:");
+        foreach (var g in histo) Console.WriteLine($"  {g.Key} quads: {g.Count()} sectors");
+    }
+}
+
+// Investigate: for border/solid-neighbor walls (the "unreliable neighbor" case), how many REAL
+// compiled quads typically exist at the seam? If mostly 2-3, a shape-aware split (using real quad
+// boundaries) could beat the fixed "sixth" heuristic without needing Floor2/Ceiling2 at all.
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Real compiled quad count at ALL border/solid-neighbor wall seams ---");
+    bool IsBorderOrSolidLocal(PRJ2_Extractor.Models.LevelRoom room, int x, int z)
+    {
+        if (x < 0 || z < 0 || x >= room.NumX || z >= room.NumZ) return true;
+        if (x == 0 || x == room.NumX - 1 || z == 0 || z == room.NumZ - 1) return true;
+        int idx = x * room.NumZ + z;
+        if (idx < 0 || idx >= room.Sectors.Length) return true;
+        return room.Sectors[idx].Floor == -127;
+    }
+
+    var quadCounts = new List<int>();
+    int checkedSeams = 0;
+    for (int ri = 0; ri < level.Rooms.Length; ri++)
+    {
+        var r1 = level.Rooms[ri];
+        for (int x = 1; x < r1.NumX; x++)
+        for (int z = 0; z < r1.NumZ; z++)
+        {
+            if (!IsBorderOrSolidLocal(r1, x - 1, z)) continue; // only the "unreliable neighbor" case
+            checkedSeams++;
+
+            int seamWorldX = x * 1024;
+            int zLo = z * 1024, zHi = (z + 1) * 1024;
+            int count = 0;
+            foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+            {
+                var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+                int avgX = (int)verts.Average(v => (int)v.X);
+                int avgZ = (int)verts.Average(v => (int)v.Z);
+                int minX = verts.Min(v => (int)v.X), maxX = verts.Max(v => (int)v.X);
+                bool nearSeam = Math.Abs(avgX - seamWorldX) < 64 && Math.Abs(maxX - minX) < 64;
+                if (nearSeam && avgZ >= zLo - 64 && avgZ <= zHi + 64) count++;
+            }
+            if (count > 0) quadCounts.Add(count);
+        }
+    }
+    Console.WriteLine($"Border/solid-neighbor X-direction seams checked: {checkedSeams}");
+    Console.WriteLine($"...of which have 1+ real compiled quads: {quadCounts.Count}");
+    var histo = quadCounts.GroupBy(c => c).OrderBy(g => g.Key);
+    Console.WriteLine("Quad-count histogram (seams with real geometry only):");
+    foreach (var g in histo) Console.WriteLine($"  {g.Key} quads: {g.Count()} seams");
+    Console.WriteLine($"Seams with <=3 quads (fit cleanly in QA/Middle/WS): {quadCounts.Count(c => c <= 3)} / {quadCounts.Count} ({100.0*quadCounts.Count(c=>c<=3)/Math.Max(1,quadCounts.Count):F1}%)");
+}
+
+// --- Floor coverage investigation: for reference sectors with a real Floor texture, do we have
+// a real compiled floor quad at that sector, and if so why didn't we assign it? ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Floor coverage investigation ---");
+    int totalMissing = 0, hasRealQuadButMissing = 0, noRealQuadAtAll = 0, ourSlotWasSet = 0;
+    var sampleMissingWithQuad = new List<(int room, int x, int z)>();
+
+    for (int ri = 0; ri < refRooms.Count; ri++)
+    {
+        var refRoom = refRooms[ri];
+        var r1 = level.Rooms.FirstOrDefault(rr => Math.Abs(rr.X - refRoom.Position.X * 1024) < 1100 && Math.Abs(rr.Z - refRoom.Position.Z * 1024) < 1100);
+        if (r1 == null) continue;
+        int roomIdx = Array.IndexOf(level.Rooms, r1);
+        var pr = prj.Rooms[roomIdx];
+
+        for (int x = 0; x < refRoom.NumXSectors && x < pr.XSize; x++)
+        for (int z = 0; z < refRoom.NumZSectors && z < pr.ZSize; z++)
+        {
+            if (!refRoom.Sectors[x, z].GetFaceTextures().ContainsKey(SectorFace.Floor)) continue;
+
+            int target = x * pr.ZSize + z;
+            if (target < 0 || target >= pr.Blocks.Length) continue;
+            bool ourSlotSet = pr.Blocks[target].Textures[0].Tipo == 0x0007;
+            if (ourSlotSet) { ourSlotWasSet++; continue; }
+
+            totalMissing++;
+
+            // Does a real compiled floor quad exist near this sector's world position?
+            int worldXlo = x * 1024, worldXhi = (x + 1) * 1024;
+            int worldZlo = z * 1024, worldZhi = (z + 1) * 1024;
+            bool foundQuad = false;
+            foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+            {
+                var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+                int minY = verts.Min(v => (int)v.Y), maxY = verts.Max(v => (int)v.Y);
+                if (Math.Abs(maxY - minY) > 8) continue; // not flat -> not floor/ceiling
+                int avgX = (int)verts.Average(v => (int)v.X);
+                int avgZ = (int)verts.Average(v => (int)v.Z);
+                if (avgX >= worldXlo - 64 && avgX <= worldXhi + 64 && avgZ >= worldZlo - 64 && avgZ <= worldZhi + 64)
+                { foundQuad = true; break; }
+            }
+            if (foundQuad) { hasRealQuadButMissing++; if (sampleMissingWithQuad.Count < 10) sampleMissingWithQuad.Add((roomIdx, x, z)); }
+            else noRealQuadAtAll++;
+        }
+    }
+
+    Console.WriteLine($"Reference sectors with a Floor texture: {ourSlotWasSet + totalMissing}");
+    Console.WriteLine($"  our slot already set: {ourSlotWasSet}");
+    Console.WriteLine($"  missing entirely: {totalMissing}");
+    Console.WriteLine($"    of which HAVE a real compiled flat quad nearby (should be fixable): {hasRealQuadButMissing}");
+    Console.WriteLine($"    of which have NO real compiled quad at all (likely unrecoverable): {noRealQuadAtAll}");
+    Console.WriteLine("Sample fixable cases (room, x, z):");
+    foreach (var s in sampleMissingWithQuad) Console.WriteLine($"  room={s.room} x={s.x} z={s.z}");
+}
+
+// --- Deep dive: why does room=2 x=1 z=7 (a "fixable" Floor case) not get classified? ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Deep dive: room2 sector(1,7) floor classification ---");
+    var r1 = level.Rooms[2];
+    var pr = prj.Rooms[2];
+    int target = 1 * pr.ZSize + 7;
+    var block = pr.Blocks[target];
+    Console.WriteLine($"Block.Floor={block.Floor} Block.Ceiling={block.Ceiling}");
+    Console.WriteLine($"Computed floorY={-block.Floor*256} ceilingY={-block.Ceiling*256}");
+    Console.WriteLine($"Floor slot[0] Tipo={block.Textures[0].Tipo:X4}  Ceiling slot[1] Tipo={block.Textures[1].Tipo:X4}");
+
+    int worldXlo = 1 * 1024, worldXhi = 2 * 1024;
+    int worldZlo = 7 * 1024, worldZhi = 8 * 1024;
+    foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+    {
+        var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+        int minY = verts.Min(v => (int)v.Y), maxY = verts.Max(v => (int)v.Y);
+        if (Math.Abs(maxY - minY) > 8) continue;
+        int avgX = (int)verts.Average(v => (int)v.X);
+        int avgZ = (int)verts.Average(v => (int)v.Z);
+        int avgY = (int)verts.Average(v => (int)v.Y);
+        int minX = verts.Min(v=>(int)v.X), maxX = verts.Max(v=>(int)v.X);
+        int minZ = verts.Min(v=>(int)v.Z), maxZ = verts.Max(v=>(int)v.Z);
+        if (avgX >= worldXlo - 64 && avgX <= worldXhi + 64 && avgZ >= worldZlo - 64 && avgZ <= worldZhi + 64)
+        {
+            Console.WriteLine($"  Real quad: avgX={avgX} avgZ={avgZ} avgY={avgY}  X=[{minX},{maxX}] Z=[{minZ},{maxZ}]  tex={f.Texture} isTriangle={f.IsTriangle}");
+        }
+    }
+}
+
+// --- Check if the flat floor triangle at room2 (1,7) has a sibling triangle completing the quad ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- room2 sector(1,7): all flat triangles/rects covering this exact sector ---");
+    var r1 = level.Rooms[2];
+    int worldXlo = 1 * 1024, worldXhi = 2 * 1024;
+    int worldZlo = 7 * 1024, worldZhi = 8 * 1024;
+    foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+    {
+        var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+        int minY = verts.Min(v => (int)v.Y), maxY = verts.Max(v => (int)v.Y);
+        if (Math.Abs(maxY - minY) > 8) continue;
+        int minX = verts.Min(v=>(int)v.X), maxX = verts.Max(v=>(int)v.X);
+        int minZ = verts.Min(v=>(int)v.Z), maxZ = verts.Max(v=>(int)v.Z);
+        // exact overlap with this sector's bounding box
+        if (maxX < worldXlo || minX > worldXhi || maxZ < worldZlo || minZ > worldZhi) continue;
+        int avgY = (int)verts.Average(v => (int)v.Y);
+        Console.WriteLine($"  {(f.IsTriangle ? "TRI" : "RECT")} tex={f.Texture} avgY={avgY} X=[{minX},{maxX}] Z=[{minZ},{maxZ}] verts=[{string.Join(";", verts.Select(v=>$"({v.X},{v.Z})"))}]");
+    }
+}
+
+// --- Debug why Floor_Triangle2 dropped to 0: find a reference sector with Floor_Triangle2 and
+// inspect the real compiled triangles there. ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Floor_Triangle2 zero-coverage debug ---");
+    int found = 0;
+    for (int ri = 0; ri < refRooms.Count && found < 3; ri++)
+    {
+        var refRoom = refRooms[ri];
+        var r1 = level.Rooms.FirstOrDefault(rr => Math.Abs(rr.X - refRoom.Position.X * 1024) < 1100 && Math.Abs(rr.Z - refRoom.Position.Z * 1024) < 1100);
+        if (r1 == null) continue;
+        int roomIdx = Array.IndexOf(level.Rooms, r1);
+
+        for (int x = 0; x < refRoom.NumXSectors && found < 3; x++)
+        for (int z = 0; z < refRoom.NumZSectors && found < 3; z++)
+        {
+            if (!refRoom.Sectors[x, z].GetFaceTextures().ContainsKey(SectorFace.Floor_Triangle2)) continue;
+            found++;
+            Console.WriteLine();
+            Console.WriteLine($"refRoom[{ri}] (our room {roomIdx}) sector({x},{z}) has Floor_Triangle2 in reference");
+
+            int worldXlo = x * 1024, worldXhi = (x + 1) * 1024;
+            int worldZlo = z * 1024, worldZhi = (z + 1) * 1024;
+            foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+            {
+                var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+                int minY = verts.Min(v => (int)v.Y), maxY = verts.Max(v => (int)v.Y);
+                int minX = verts.Min(v=>(int)v.X), maxX = verts.Max(v=>(int)v.X);
+                int minZ = verts.Min(v=>(int)v.Z), maxZ = verts.Max(v=>(int)v.Z);
+                if (maxX < worldXlo || minX > worldXhi || maxZ < worldZlo || minZ > worldZhi) continue;
+                Console.WriteLine($"  {(f.IsTriangle ? "TRI" : "RECT")} tex={f.Texture} Yrange=[{minY},{maxY}] X=[{minX},{maxX}] Z=[{minZ},{maxZ}]");
+            }
+        }
+    }
+}
+
+// --- Investigate "texture larger than 64x64": how many floor/ceiling faces span multiple sectors
+// via BlockRange, and what does their TexInfo UV size look like? ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Oversized texture investigation: floor/ceiling faces spanning multiple sectors ---");
+    int singleSector = 0, multiSector = 0;
+    var multiSectorSamples = new List<(int room, int minX, int maxX, int minZ, int maxZ, int texRight, int texBottom)>();
+
+    for (int ri = 0; ri < level.Rooms.Length; ri++)
+    {
+        var r1 = level.Rooms[ri];
+        foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+        {
+            var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+            int minY = verts.Min(v => (int)v.Y), maxY = verts.Max(v => (int)v.Y);
+            int minX = verts.Min(v => (int)v.X), maxX = verts.Max(v => (int)v.X);
+            int minZ = verts.Min(v => (int)v.Z), maxZ = verts.Max(v => (int)v.Z);
+            bool looksLikeXWall = Math.Abs(maxX - minX) <= 8;
+            bool looksLikeZWall = Math.Abs(maxZ - minZ) <= 8;
+            if (looksLikeXWall || looksLikeZWall) continue; // only floor/ceiling faces
+
+            int bx0 = Math.Max(0, minX / 1024), bx1 = Math.Max(0, Math.Max(minX, maxX - 1) / 1024);
+            int bz0 = Math.Max(0, minZ / 1024), bz1 = Math.Max(0, Math.Max(minZ, maxZ - 1) / 1024);
+            int spanX = bx1 - bx0 + 1, spanZ = bz1 - bz0 + 1;
+
+            if (spanX == 1 && spanZ == 1) singleSector++;
+            else
+            {
+                multiSector++;
+                int ti = f.Texture & 0x7FFF;
+                if (ti >= 0 && ti < level.ObjectTextures.Length && multiSectorSamples.Count < 15)
+                {
+                    var ot = level.ObjectTextures[ti];
+                    int tminX = ot.Vertices.Min(v => v.X >> 8), tmaxX = ot.Vertices.Max(v => v.X >> 8);
+                    int tminY = ot.Vertices.Min(v => v.Y >> 8), tmaxY = ot.Vertices.Max(v => v.Y >> 8);
+                    multiSectorSamples.Add((ri, minX, maxX, minZ, maxZ, tmaxX - tminX, tmaxY - tminY));
+                }
+            }
+        }
+    }
+    Console.WriteLine($"Floor/ceiling faces spanning exactly 1 sector: {singleSector}");
+    Console.WriteLine($"Floor/ceiling faces spanning MULTIPLE sectors: {multiSector}");
+    Console.WriteLine("Samples of multi-sector faces (room, world X/Z span, texture UV width/height):");
+    foreach (var s in multiSectorSamples)
+        Console.WriteLine($"  room={s.room} X=[{s.minX},{s.maxX}] (span={s.maxX-s.minX}) Z=[{s.minZ},{s.maxZ}] (span={s.maxZ-s.minZ})  texUV width={s.texRight} height={s.texBottom}");
+}
+
+// --- Investigate Room2 floor textures: real UV sizes for all floor/ceiling faces there ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Room2 floor/ceiling texture UV size audit ---");
+    var r1 = level.Rooms[2];
+    foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+    {
+        var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+        int minX = verts.Min(v => (int)v.X), maxX = verts.Max(v => (int)v.X);
+        int minZ = verts.Min(v => (int)v.Z), maxZ = verts.Max(v => (int)v.Z);
+        bool looksLikeXWall = Math.Abs(maxX - minX) <= 8;
+        bool looksLikeZWall = Math.Abs(maxZ - minZ) <= 8;
+        if (looksLikeXWall || looksLikeZWall) continue; // only floor/ceiling
+
+        int ti = f.Texture & 0x7FFF;
+        if (ti < 0 || ti >= level.ObjectTextures.Length) continue;
+        var ot = level.ObjectTextures[ti];
+        int tminX = ot.Vertices.Min(v => v.X >> 8), tmaxX = ot.Vertices.Max(v => v.X >> 8);
+        int tminY = ot.Vertices.Min(v => v.Y >> 8), tmaxY = ot.Vertices.Max(v => v.Y >> 8);
+        int uvW = tmaxX - tminX, uvH = tmaxY - tminY;
+        int tile = ot.TileAndFlag & 0x7FFF;
+        // Flag anything noticeably bigger than a standard ~63x63 tile.
+        if (uvW > 70 || uvH > 70)
+            Console.WriteLine($"  LARGE UV: tex={ti} tile={tile} uvSize={uvW}x{uvH} faceX=[{minX},{maxX}] faceZ=[{minZ},{maxZ}] isTri={f.IsTriangle}");
+    }
+    Console.WriteLine("(no further output above this line means no oversized UVs found in Room2)");
+}
+
+// --- Compare our Room2 large-UV floor assignment against the reference at the same sector ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Room2 large-UV sectors vs reference ---");
+    var r1 = level.Rooms[2];
+    var refRoom = refRooms.FirstOrDefault(rr => Math.Abs(rr.Position.X * 1024 - r1.X) < 1100 && Math.Abs(rr.Position.Z * 1024 - r1.Z) < 1100);
+    if (refRoom == null) { Console.WriteLine("No matching reference room found for room2!"); }
+    else
+    {
+        // Sectors x=10, z=4..13 (world X=[10240,11264], Z spans multiple).
+        for (int z = 4; z <= 13; z++)
+        {
+            int x = 10;
+            if (x >= refRoom.NumXSectors || z >= refRoom.NumZSectors) continue;
+            var faces = refRoom.Sectors[x, z].GetFaceTextures();
+            if (!faces.TryGetValue(SectorFace.Floor, out var tex))
+            {
+                Console.WriteLine($"  sector({x},{z}): reference has NO Floor texture here");
+                continue;
+            }
+            float w = Math.Abs(tex.TexCoord1.X - tex.TexCoord0.X);
+            float h = Math.Abs(tex.TexCoord2.Y - tex.TexCoord0.Y);
+            Console.WriteLine($"  sector({x},{z}): reference Floor UV size ~ {w:F0}x{h:F0}  TexCoord0=({tex.TexCoord0.X:F0},{tex.TexCoord0.Y:F0})");
+        }
+    }
+}
+
+// --- Raw byte-level inspection of the outlier "large UV" ObjectTexture entries ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Raw vertex byte inspection: is Xcoordinate/Ycoordinate always 0 or 255? ---");
+    foreach (var idx in new[] { 2109, 2106, 2102, 2107, 2108, 2104, 2105 })
+    {
+        if (idx >= level.ObjectTextures.Length) continue;
+        var ot = level.ObjectTextures[idx];
+        Console.WriteLine($"ObjTex[{idx}]: TileAndFlag=0x{ot.TileAndFlag:X4} (tile={ot.TileAndFlag & 0x7FFF})");
+        foreach (var v in ot.Vertices)
+        {
+            int xCoordByte = v.X & 0xFF, xPixelByte = (v.X >> 8) & 0xFF;
+            int yCoordByte = v.Y & 0xFF, yPixelByte = (v.Y >> 8) & 0xFF;
+            bool xOk = xCoordByte == 0 || xCoordByte == 255;
+            bool yOk = yCoordByte == 0 || yCoordByte == 255;
+            Console.WriteLine($"    X: raw=0x{v.X:X4} coordByte={xCoordByte}{(xOk?"":"  <-- NOT 0/255!")} pixelByte={xPixelByte}   Y: raw=0x{v.Y:X4} coordByte={yCoordByte}{(yOk?"":"  <-- NOT 0/255!")} pixelByte={yPixelByte}");
+        }
+    }
+}
+
+// --- Precise check: what texture index did OUR code actually write into Room2 Floor slots
+// (10, z=4..13), and what's THAT exact ObjectTexture's UV bounding box? ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Precise Room2 (x=10, z=4..13) Floor slot audit ---");
+    var pr = prj.Rooms[2];
+    for (int z = 4; z <= 13; z++)
+    {
+        int x = 10;
+        int target = x * pr.ZSize + z;
+        if (target < 0 || target >= pr.Blocks.Length) { Console.WriteLine($"  ({x},{z}): out of range"); continue; }
+        var blockTex = pr.Blocks[target].Textures[0]; // Floor slot
+        if (blockTex.Tipo != 0x0007) { Console.WriteLine($"  ({x},{z}): Floor slot NOT SET (Tipo=0x{blockTex.Tipo:X4})"); continue; }
+
+        int textureIndex = blockTex.Index; // full int now, no more 10-bit packing
+        if (textureIndex < 0 || textureIndex >= level.ObjectTextures.Length)
+        { Console.WriteLine($"  ({x},{z}): textureIndex={textureIndex} OUT OF RANGE"); continue; }
+
+        var ot = level.ObjectTextures[textureIndex];
+        int tile = ot.TileAndFlag & 0x7FFF;
+        var realTexInfo = prj.Textures[textureIndex];
+        Console.WriteLine($"  ({x},{z}): textureIndex={textureIndex} tile={tile} REAL TexInfo uvSize={realTexInfo.Right}x{realTexInfo.Bottom} X={realTexInfo.X} rotation={blockTex.Rotation} triangle={blockTex.Triangle} isTriangleTexFlag={(ot.NewFlags & 0x8000) != 0}");
+    }
+}
+
+// --- Updated Floor coverage investigation using the REAL classification criteria (not-a-wall,
+// matching current ApplyRoomFaceTexture), not the old flat-only filter. ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Floor coverage investigation v2 (matches current not-a-wall criteria) ---");
+    int totalMissing = 0, hasRealQuadButMissing = 0, noRealQuadAtAll = 0, ourSlotWasSet = 0;
+    var sampleMissingWithQuad = new List<(int room, int x, int z)>();
+    var sampleMissingNoQuad = new List<(int room, int x, int z)>();
+
+    for (int ri = 0; ri < refRooms.Count; ri++)
+    {
+        var refRoom = refRooms[ri];
+        var r1 = level.Rooms.FirstOrDefault(rr => Math.Abs(rr.X - refRoom.Position.X * 1024) < 1100 && Math.Abs(rr.Z - refRoom.Position.Z * 1024) < 1100);
+        if (r1 == null) continue;
+        int roomIdx = Array.IndexOf(level.Rooms, r1);
+        var pr = prj.Rooms[roomIdx];
+
+        for (int x = 0; x < refRoom.NumXSectors && x < pr.XSize; x++)
+        for (int z = 0; z < refRoom.NumZSectors && z < pr.ZSize; z++)
+        {
+            if (!refRoom.Sectors[x, z].GetFaceTextures().ContainsKey(SectorFace.Floor)) continue;
+
+            int target = x * pr.ZSize + z;
+            if (target < 0 || target >= pr.Blocks.Length) continue;
+            bool ourSlotSet = pr.Blocks[target].Textures[0].Tipo == 0x0007;
+            if (ourSlotSet) { ourSlotWasSet++; continue; }
+
+            totalMissing++;
+
+            int worldXlo = x * 1024, worldXhi = (x + 1) * 1024;
+            int worldZlo = z * 1024, worldZhi = (z + 1) * 1024;
+            bool foundQuad = false;
+            foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+            {
+                var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+                int minX = verts.Min(v => (int)v.X), maxX = verts.Max(v => (int)v.X);
+                int minZ = verts.Min(v => (int)v.Z), maxZ = verts.Max(v => (int)v.Z);
+                bool looksLikeXWall = Math.Abs(maxX - minX) <= 8;
+                bool looksLikeZWall = Math.Abs(maxZ - minZ) <= 8;
+                if (looksLikeXWall || looksLikeZWall) continue; // not floor/ceiling shaped
+                int avgX = (int)verts.Average(v => (int)v.X);
+                int avgZ = (int)verts.Average(v => (int)v.Z);
+                if (avgX >= worldXlo - 64 && avgX <= worldXhi + 64 && avgZ >= worldZlo - 64 && avgZ <= worldZhi + 64)
+                { foundQuad = true; break; }
+            }
+            if (foundQuad) { hasRealQuadButMissing++; if (sampleMissingWithQuad.Count < 15) sampleMissingWithQuad.Add((roomIdx, x, z)); }
+            else { noRealQuadAtAll++; if (sampleMissingNoQuad.Count < 5) sampleMissingNoQuad.Add((roomIdx, x, z)); }
+        }
+    }
+
+    Console.WriteLine($"Reference sectors with a Floor texture: {ourSlotWasSet + totalMissing}");
+    Console.WriteLine($"  our slot already set: {ourSlotWasSet}");
+    Console.WriteLine($"  missing entirely: {totalMissing}");
+    Console.WriteLine($"    of which HAVE a real compiled quad nearby (should be fixable): {hasRealQuadButMissing}");
+    Console.WriteLine($"    of which have NO real compiled quad at all (likely unrecoverable): {noRealQuadAtAll}");
+    Console.WriteLine("Sample fixable cases (room, x, z):");
+    foreach (var s in sampleMissingWithQuad) Console.WriteLine($"  room={s.room} x={s.x} z={s.z}");
+    Console.WriteLine("Sample unrecoverable cases (room, x, z):");
+    foreach (var s in sampleMissingNoQuad) Console.WriteLine($"  room={s.room} x={s.x} z={s.z}");
+}
+
+// --- Deep dive: room2 sector(1,3) -- why is it missing despite having real geometry? ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Deep dive: room2 sector(1,3) ---");
+    var r1 = level.Rooms[2];
+    var pr = prj.Rooms[2];
+    int target = 1 * pr.ZSize + 3;
+    var block = pr.Blocks[target];
+    Console.WriteLine($"Block.Floor={block.Floor} Block.Ceiling={block.Ceiling} FloorCorner=[{string.Join(",", block.FloorCorner)}]");
+    Console.WriteLine($"Floor slot[0] Tipo=0x{block.Textures[0].Tipo:X4}  Floor_Tri2 slot[8] Tipo=0x{block.Textures[8].Tipo:X4}");
+
+    int worldXlo = 1 * 1024, worldXhi = 2 * 1024;
+    int worldZlo = 3 * 1024, worldZhi = 4 * 1024;
+    foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+    {
+        var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+        int minX = verts.Min(v => (int)v.X), maxX = verts.Max(v => (int)v.X);
+        int minZ = verts.Min(v => (int)v.Z), maxZ = verts.Max(v => (int)v.Z);
+        bool looksLikeXWall = Math.Abs(maxX - minX) <= 8;
+        bool looksLikeZWall = Math.Abs(maxZ - minZ) <= 8;
+        if (looksLikeXWall || looksLikeZWall) continue;
+        int avgX = (int)verts.Average(v => (int)v.X);
+        int avgZ = (int)verts.Average(v => (int)v.Z);
+        if (avgX >= worldXlo - 64 && avgX <= worldXhi + 64 && avgZ >= worldZlo - 64 && avgZ <= worldZhi + 64)
+        {
+            int minY = verts.Min(v=>(int)v.Y), maxY = verts.Max(v=>(int)v.Y);
+            int avgY = (int)verts.Average(v => (int)v.Y);
+            Console.WriteLine($"  Real quad: tex={f.Texture} isTri={f.IsTriangle} avgY={avgY} Yrange=[{minY},{maxY}] X=[{minX},{maxX}] Z=[{minZ},{maxZ}]");
+        }
+    }
+}
+
+// --- Check room2 dimensions and border status for sector (1,3) ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Room2 border check ---");
+    var r1 = level.Rooms[2];
+    Console.WriteLine($"Room2: NumX={r1.NumX} NumZ={r1.NumZ} YBottom={r1.YBottom} YTop={r1.YTop}");
+    Console.WriteLine($"Sector (1,3) is border: x==0={1==0} x==NumX-1={1==r1.NumX-1} z==0={3==0} z==NumZ-1={3==r1.NumZ-1}");
+    int idx = 1 * r1.NumZ + 3;
+    var sec = r1.Sectors[idx];
+    Console.WriteLine($"Raw sector (1,3): Floor={sec.Floor} Ceiling={sec.Ceiling}");
+}
 return 0;
