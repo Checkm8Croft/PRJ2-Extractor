@@ -199,6 +199,26 @@ This function is shared by **both** floor/ceiling classification (2.9's fix) and
 
 Notably this also fixed the Ceiling over-assignment noted in 2.9 (108%→99.6%) — same root cause. Overall level coverage: ~61.4% → **~72.9%** (4173/6354 reference face-texture entries). Floor/ceiling coverage is now essentially complete; remaining gaps are concentrated entirely in the wall tiers (QA 6.7–64.8%, WS 6.7–22.1%, Middle still over-assigned 161–267%, Floor2/Ceiling2 still 0% per 2.7's established ceiling on recoverability).
 
+### 2.12 — Extended rank-based (2.8) tier assignment from "border/solid neighbor only" to "any seam with 3+ real compiled quads"
+
+**Motivation:** after 2.11, wall QA jumped for the two "Negative" directions specifically (roughly 10%→65%) while WS and the "Positive" directions barely moved, and Middle over-assignment got slightly worse. The reliable-neighbor per-corner algorithm (2.1) inherently caps at 3 tiers; seams with more real quads than that were already known (from Floor2/Ceiling2's investigation) to need more bands than QA/Middle/WS can hold.
+
+**Fix:** added a per-room pre-pass (`CountWallQuadsPerSeam`) that counts real compiled wall quads per seam key before the main classification pass, then extended `neighborUnreliable` (the condition that routes a seam to the rank-based FlushUnreliableWallSeams path instead of the per-corner algorithm) to also trigger whenever a seam has 3 or more real quads, regardless of whether the neighbor is border/solid.
+
+**Threshold check:** tried both `>= 3` and `>= 4` as the cutoff. `>= 4` gave a *worse* overall result (89.67%→90.02% vs `>=3`'s 89.67%→90.70%) and, tellingly, produced **identical** Middle over-assignment numbers to `>=3` — proving the Middle regression comes from seams with 4+ quads specifically (affected either way), while exactly-3-quad seams were a net *positive* contribution that `>=4` throws away. Kept `>=3`.
+
+**Result:** wall-tier match 89.80% → **90.70%**, but with an uneven, only partially satisfying profile (QA_Negative* jumped to ~65%, QA_Positive* and all WS barely moved, Middle over-assignment got marginally worse on 2 of 4 directions) — this incompleteness is what led directly to investigating 2.13 below.
+
+### 2.13 — The QA/WS Positive-direction asymmetry was a missing mirrored-ownership case, not noise
+
+**Investigation:** 2.12 fixed "Negative"-direction QA but left "Positive"-direction QA and WS far behind (QA_Positive ~15-22% vs QA_Negative ~65%). Traced one specific case (`alexhub2` room0, seam x=1/x=2 at z=3) where the reference wants `Wall_PositiveX_QA` at sector (1,3). Checked whether the data existed anywhere in our own output: it didn't — neither on the "own" (higher-index, x=2) sector's slot 2 nor on (1,3) itself. Digging into the raw block data revealed the real cause: `own` (x=2) has a flat floor (17, no corner data); the **neighbor** (x=1) has the sloped floor (`FloorCorner=[5,0,0,5]`, base 27). The one real compiled quad at that seam (`Yrange=[-5632,-4352]`) matches exactly: -4352 is own's flat floor, -5632 is the neighbor's deepest sloped corner. This is a genuine QA-shaped step — but the *neighbor's* floor is the taller one, not own's.
+
+The existing `hasQaOnOwn`/`hasWsOnOwn` tests (2.1) only checked "own's floor/ceiling exceeds neighbor's" — they never checked the mirrored direction ("neighbor's floor/ceiling exceeds own's"). Per the classic-PRJ storage convention (verified earlier in `PrjLoader.cs`), slot 2/5 (QA) and slot 3/6 (WS) are **always physically stored on the higher-index sector** regardless of which side geometrically owns the step — TombLib decides which side's data it represents at *load* time via `IsFaceDefined`. Since our own classification only tested the "own owns it" direction, any seam where the *neighbor* had the real height difference fell through entirely to Middle, even with perfectly good compiled geometry sitting right there.
+
+**Fix:** extended `hasQaOnOwn`/`hasWsOnOwn` (and their Y-band computation) to also accept the mirrored direction (`neighFloorA < ownFloorA`, etc.), using the same shared physical slot either way — matching PrjLoader's actual storage convention instead of only testing one of its two directions.
+
+**Result:** wall-tier match 90.70% → **92.18%** (biggest single jump of the wall-tier work). The QA Positive/Negative asymmetry is now gone: all four directions sit in a tight 64.4%–67.2% band (previously 9.7%–65%). WS improved and became far more uniform too: 21.1%–27.7% across all four directions (previously 5.7%–22.1%, badly skewed). Overall level coverage: ~72.9% → **~71.4%**
+
 ---
 
 ## Key structural lessons (apply to future work on this codebase)

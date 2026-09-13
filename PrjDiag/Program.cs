@@ -1501,4 +1501,519 @@ foreach (var r in perRoomErr.OrderByDescending(r => r.err).Take(15))
     var sec = r1.Sectors[idx];
     Console.WriteLine($"Raw sector (1,3): Floor={sec.Floor} Ceiling={sec.Ceiling}");
 }
+
+// --- WS coverage investigation: find a specific missing WS case with real geometry, trace it. ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- WS coverage investigation ---");
+    var wsFaces = new Dictionary<SectorFace,(int qaSlot,int middleSlot,int wsSlot,bool isX)> {
+        [SectorFace.Wall_NegativeX_WS] = (2,4,3,true), [SectorFace.Wall_PositiveX_WS] = (2,4,3,true),
+        [SectorFace.Wall_NegativeZ_WS] = (5,7,6,false), [SectorFace.Wall_PositiveZ_WS] = (5,7,6,false),
+    };
+    int totalMissing = 0, hasRealQuadButMissing = 0, noRealQuadAtAll = 0;
+    var samples = new List<(int room,int x,int z,bool isX)>();
+
+    for (int ri = 0; ri < refRooms.Count; ri++)
+    {
+        var refRoom = refRooms[ri];
+        var r1 = level.Rooms.FirstOrDefault(rr => Math.Abs(rr.X - refRoom.Position.X * 1024) < 1100 && Math.Abs(rr.Z - refRoom.Position.Z * 1024) < 1100);
+        if (r1 == null) continue;
+        int roomIdx = Array.IndexOf(level.Rooms, r1);
+        var pr = prj.Rooms[roomIdx];
+
+        for (int x = 0; x < refRoom.NumXSectors && x < pr.XSize; x++)
+        for (int z = 0; z < refRoom.NumZSectors && z < pr.ZSize; z++)
+        {
+            foreach (var kv in wsFaces)
+            {
+                if (!refRoom.Sectors[x, z].GetFaceTextures().ContainsKey(kv.Key)) continue;
+                int target = x * pr.ZSize + z;
+                if (target < 0 || target >= pr.Blocks.Length) continue;
+                bool wsSet = pr.Blocks[target].Textures[kv.Value.wsSlot].Tipo == 0x0007;
+                if (wsSet) continue;
+                totalMissing++;
+                if (samples.Count < 10) samples.Add((roomIdx, x, z, kv.Value.isX));
+            }
+        }
+    }
+    Console.WriteLine($"Missing WS (all 4 directions combined, sample check): {totalMissing}");
+    Console.WriteLine("Sample cases (room,x,z,isXDirection):");
+    foreach (var s in samples) Console.WriteLine($"  room={s.room} x={s.x} z={s.z} isX={s.isX}");
+}
+
+// --- Deep dive: room0 sector(0,1) X-direction WS -- why is it not written? ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Deep dive: room0 (0,1) X-wall ---");
+    var r1 = level.Rooms[0];
+    var pr = prj.Rooms[0];
+    int target = 0 * pr.ZSize + 1;
+    var block = pr.Blocks[target];
+    Console.WriteLine($"QA[2]=0x{block.Textures[2].Tipo:X4} Middle[4]=0x{block.Textures[4].Tipo:X4} WS[3]=0x{block.Textures[3].Tipo:X4}");
+    Console.WriteLine($"Block.Floor={block.Floor} Ceiling={block.Ceiling} FloorCorner=[{string.Join(",",block.FloorCorner)}] CeilCorner=[{string.Join(",",block.CeilCorner)}]");
+
+    // Find real wall quads at this seam (X=0, world X near 0, Z in [1024,2048]).
+    int seamWorldX = 0;
+    int zLo = 1 * 1024, zHi = 2 * 1024;
+    foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+    {
+        var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+        int minX = verts.Min(v=>(int)v.X), maxX = verts.Max(v=>(int)v.X);
+        int minZ = verts.Min(v=>(int)v.Z), maxZ = verts.Max(v=>(int)v.Z);
+        bool looksLikeXWall = Math.Abs(maxX-minX) <= 8;
+        if (!looksLikeXWall) continue;
+        int avgX = (int)verts.Average(v=>(int)v.X);
+        int avgZ = (int)verts.Average(v=>(int)v.Z);
+        if (Math.Abs(avgX - seamWorldX) > 64) continue;
+        if (avgZ < zLo - 64 || avgZ > zHi + 64) continue;
+        int avgY = (int)verts.Average(v=>(int)v.Y);
+        int minY = verts.Min(v=>(int)v.Y), maxY = verts.Max(v=>(int)v.Y);
+        Console.WriteLine($"  Real X-wall quad: tex={f.Texture} avgY={avgY} Yrange=[{minY},{maxY}] Z=[{minZ},{maxZ}]");
+    }
+}
+
+// --- Bulk: how many missing WS/QA cases have real wall geometry at that seam? ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Bulk WS/QA missing-with-geometry check ---");
+    var tierFaces = new Dictionary<SectorFace,(int slot,bool isX,int negWorldOffset)> {
+        [SectorFace.Wall_NegativeX_WS] = (3,true,0), [SectorFace.Wall_NegativeX_QA] = (2,true,0),
+        [SectorFace.Wall_NegativeZ_WS] = (6,false,0), [SectorFace.Wall_NegativeZ_QA] = (5,false,0),
+    };
+    int totalMissing = 0, hasGeom = 0, noGeom = 0;
+    var fixableSamples = new List<(int room,int x,int z,string face)>();
+
+    for (int ri = 0; ri < refRooms.Count; ri++)
+    {
+        var refRoom = refRooms[ri];
+        var r1 = level.Rooms.FirstOrDefault(rr => Math.Abs(rr.X - refRoom.Position.X * 1024) < 1100 && Math.Abs(rr.Z - refRoom.Position.Z * 1024) < 1100);
+        if (r1 == null) continue;
+        int roomIdx = Array.IndexOf(level.Rooms, r1);
+        var pr = prj.Rooms[roomIdx];
+
+        for (int x = 0; x < refRoom.NumXSectors && x < pr.XSize; x++)
+        for (int z = 0; z < refRoom.NumZSectors && z < pr.ZSize; z++)
+        {
+            foreach (var kv in tierFaces)
+            {
+                if (!refRoom.Sectors[x, z].GetFaceTextures().ContainsKey(kv.Key)) continue;
+                int target = x * pr.ZSize + z;
+                if (target < 0 || target >= pr.Blocks.Length) continue;
+                if (pr.Blocks[target].Textures[kv.Value.slot].Tipo == 0x0007) continue; // already set
+                totalMissing++;
+
+                int seamWorldX = kv.Value.isX ? x * 1024 : 0;
+                int seamWorldZ = kv.Value.isX ? 0 : z * 1024;
+                bool found = false;
+                foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+                {
+                    var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+                    int fminX = verts.Min(v=>(int)v.X), fmaxX = verts.Max(v=>(int)v.X);
+                    int fminZ = verts.Min(v=>(int)v.Z), fmaxZ = verts.Max(v=>(int)v.Z);
+                    if (kv.Value.isX)
+                    {
+                        if (Math.Abs(fmaxX-fminX) > 8) continue;
+                        int avgX = (int)verts.Average(v=>(int)v.X);
+                        if (Math.Abs(avgX - seamWorldX) > 64) continue;
+                        int avgZ = (int)verts.Average(v=>(int)v.Z);
+                        if (avgZ < z*1024 - 64 || avgZ > (z+1)*1024 + 64) continue;
+                    }
+                    else
+                    {
+                        if (Math.Abs(fmaxZ-fminZ) > 8) continue;
+                        int avgZ2 = (int)verts.Average(v=>(int)v.Z);
+                        if (Math.Abs(avgZ2 - seamWorldZ) > 64) continue;
+                        int avgX2 = (int)verts.Average(v=>(int)v.X);
+                        if (avgX2 < x*1024 - 64 || avgX2 > (x+1)*1024 + 64) continue;
+                    }
+                    found = true; break;
+                }
+                if (found) { hasGeom++; if (fixableSamples.Count < 10) fixableSamples.Add((roomIdx,x,z,kv.Key.ToString())); }
+                else noGeom++;
+            }
+        }
+    }
+    Console.WriteLine($"Missing QA/WS (neg-direction sample): {totalMissing}  hasRealGeometry={hasGeom}  noGeometry={noGeom}");
+    Console.WriteLine("Fixable samples:");
+    foreach (var s in fixableSamples) Console.WriteLine($"  room={s.room} x={s.x} z={s.z} face={s.face}");
+}
+
+// --- Deep dive: room1 sector(2,4) -- both X and Z QA/WS missing ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Deep dive: room1 (2,4) ---");
+    var r1 = level.Rooms[1];
+    var pr = prj.Rooms[1];
+    int target = 2 * pr.ZSize + 4;
+    var block = pr.Blocks[target];
+    Console.WriteLine($"own: Floor={block.Floor} Ceiling={block.Ceiling} FloorCorner=[{string.Join(",",block.FloorCorner)}] CeilCorner=[{string.Join(",",block.CeilCorner)}]");
+    Console.WriteLine($"QA[2]=0x{block.Textures[2].Tipo:X4} Mid[4]=0x{block.Textures[4].Tipo:X4} WS[3]=0x{block.Textures[3].Tipo:X4}");
+    Console.WriteLine($"QA[5]=0x{block.Textures[5].Tipo:X4} Mid[7]=0x{block.Textures[7].Tipo:X4} WS[6]=0x{block.Textures[6].Tipo:X4}");
+
+    int nTarget = 1 * pr.ZSize + 4; // neighbor at x-1
+    var nBlock = pr.Blocks[nTarget];
+    Console.WriteLine($"neighbor(1,4): Floor={nBlock.Floor} Ceiling={nBlock.Ceiling}");
+
+    bool IsBorderOrSolidLocal(PRJ2_Extractor.Models.LevelRoom room, int x, int z)
+    {
+        if (x < 0 || z < 0 || x >= room.NumX || z >= room.NumZ) return true;
+        if (x == 0 || x == room.NumX - 1 || z == 0 || z == room.NumZ - 1) return true;
+        int idx = x * room.NumZ + z;
+        if (idx < 0 || idx >= room.Sectors.Length) return true;
+        return room.Sectors[idx].Floor == -127;
+    }
+    Console.WriteLine($"neighborUnreliable(x-1,4)={IsBorderOrSolidLocal(r1, 1, 4)}");
+
+    // find real wall quads at X-seam (world X=2*1024=2048), Z in [4096,5120]
+    int seamWorldX = 2*1024;
+    foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+    {
+        var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+        int minX = verts.Min(v=>(int)v.X), maxX = verts.Max(v=>(int)v.X);
+        int minZ = verts.Min(v=>(int)v.Z), maxZ = verts.Max(v=>(int)v.Z);
+        if (Math.Abs(maxX-minX) > 8) continue;
+        int avgX = (int)verts.Average(v=>(int)v.X);
+        if (Math.Abs(avgX - seamWorldX) > 64) continue;
+        int avgZ = (int)verts.Average(v=>(int)v.Z);
+        if (avgZ < 4*1024-64 || avgZ > 5*1024+64) continue;
+        int avgY = (int)verts.Average(v=>(int)v.Y);
+        int minY = verts.Min(v=>(int)v.Y), maxY = verts.Max(v=>(int)v.Y);
+        Console.WriteLine($"  Real X-wall quad: tex={f.Texture} avgY={avgY} Yrange=[{minY},{maxY}]");
+    }
+}
+
+// --- Print exact per-corner values the wall algorithm sees for room1 (2,4) X-seam ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- room1 (2,4) exact per-corner values ---");
+    var pr = prj.Rooms[1];
+    var own = pr.Blocks[2 * pr.ZSize + 4];
+    var neigh = pr.Blocks[1 * pr.ZSize + 4];
+    Console.WriteLine($"own CeilCorner=[{string.Join(",",own.CeilCorner)}]  neighbor CeilCorner=[{string.Join(",",neigh.CeilCorner)}]");
+    Console.WriteLine($"own FloorCorner=[{string.Join(",",own.FloorCorner)}]  neighbor FloorCorner=[{string.Join(",",neigh.FloorCorner)}]");
+
+    int GetCF(PRJ2_Extractor.Models.Block b, bool xp, bool zp) {
+        int idx = (xp, zp) switch { (true, false) => 0, (false, false) => 1, (false, true) => 2, (true, true) => 3 };
+        return -(b.Floor - b.FloorCorner[idx]) * 256;
+    }
+    int GetCC(PRJ2_Extractor.Models.Block b, bool xp, bool zp) {
+        int idx = (xp, zp) switch { (true, true) => 0, (false, true) => 1, (false, false) => 2, (true, false) => 3 };
+        return -(b.Ceiling + b.CeilCorner[idx]) * 256;
+    }
+    // X-direction shared corners: own XnZn/XnZp vs neighbor XpZn/XpZp
+    Console.WriteLine($"ownFloorA(XnZn)={GetCF(own,false,false)} ownFloorB(XnZp)={GetCF(own,false,true)}");
+    Console.WriteLine($"neighFloorA(XpZn)={GetCF(neigh,true,false)} neighFloorB(XpZp)={GetCF(neigh,true,true)}");
+    Console.WriteLine($"ownCeilA(XnZn)={GetCC(own,false,false)} ownCeilB(XnZp)={GetCC(own,false,true)}");
+    Console.WriteLine($"neighCeilA(XpZn)={GetCC(neigh,true,false)} neighCeilB(XpZp)={GetCC(neigh,true,true)}");
+}
+
+// --- Check which side the reference actually stores WS on: (2,4) Wall_NegativeX_WS or (1,4) Wall_PositiveX_WS? ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- room1: reference WS side check for seam (1,4)|(2,4) ---");
+    var r1 = level.Rooms[1];
+    var refRoom = refRooms.FirstOrDefault(rr => Math.Abs(rr.Position.X * 1024 - r1.X) < 1100 && Math.Abs(rr.Position.Z * 1024 - r1.Z) < 1100);
+    if (refRoom == null) { Console.WriteLine("no matching ref room"); }
+    else
+    {
+        var facesAt24 = refRoom.Sectors[2, 4].GetFaceTextures();
+        var facesAt14 = refRoom.Sectors[1, 4].GetFaceTextures();
+        Console.WriteLine("Sector (2,4) faces in reference:");
+        foreach (var k in facesAt24.Keys) Console.WriteLine($"  {k}");
+        Console.WriteLine("Sector (1,4) faces in reference:");
+        foreach (var k in facesAt14.Keys) Console.WriteLine($"  {k}");
+    }
+}
+
+// --- Check reference: WS at (2,4) NegativeX vs (1,4) PositiveX -- which side does it really use? ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Reference WS side check for room1 seam x=2/x=1, z=4 ---");
+    var refRoom = refRooms.FirstOrDefault(rr => Math.Abs(rr.Position.X * 1024 - level.Rooms[1].X) < 1100 && Math.Abs(rr.Position.Z * 1024 - level.Rooms[1].Z) < 1100);
+    if (refRoom == null) { Console.WriteLine("no matching ref room"); }
+    else
+    {
+        var faces24 = refRoom.Sectors[2, 4].GetFaceTextures();
+        var faces14 = refRoom.Sectors[1, 4].GetFaceTextures();
+        Console.WriteLine("Sector (2,4) faces: " + string.Join(", ", faces24.Keys));
+        Console.WriteLine("Sector (1,4) faces: " + string.Join(", ", faces14.Keys));
+    }
+}
+
+// --- Investigate Positive/Negative asymmetry: find a Wall_PositiveX_QA reference case, check
+// whether OUR write exists on the mirrored neighbor's -X side (slot 2) but got misattributed. ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- PositiveX/NegativeX asymmetry investigation ---");
+    int found = 0;
+    for (int ri = 0; ri < refRooms.Count && found < 5; ri++)
+    {
+        var refRoom = refRooms[ri];
+        var r1 = level.Rooms.FirstOrDefault(rr => Math.Abs(rr.X - refRoom.Position.X * 1024) < 1100 && Math.Abs(rr.Z - refRoom.Position.Z * 1024) < 1100);
+        if (r1 == null) continue;
+        int roomIdx = Array.IndexOf(level.Rooms, r1);
+        var pr = prj.Rooms[roomIdx];
+
+        for (int x = 0; x < refRoom.NumXSectors - 1 && x < pr.XSize - 1 && found < 5; x++)
+        for (int z = 0; z < refRoom.NumZSectors && z < pr.ZSize && found < 5; z++)
+        {
+            if (!refRoom.Sectors[x, z].GetFaceTextures().ContainsKey(SectorFace.Wall_PositiveX_QA)) continue;
+            found++;
+            // Wall_PositiveX_QA at (x,z) is mirrored from the HIGHER-index neighbor (x+1,z)'s own -X
+            // side, i.e. exactly our own "ownX=x+1" write target for slot 2.
+            int ownTarget = (x + 1) * pr.ZSize + z;
+            bool ownSlotSet = ownTarget < pr.Blocks.Length && pr.Blocks[ownTarget].Textures[2].Tipo == 0x0007;
+            // Also check if it accidentally ended up on THIS sector's own slot instead (shouldn't
+            // happen per PrjLoader's storage convention, but verify).
+            int thisTarget = x * pr.ZSize + z;
+            bool thisSlotSet = thisTarget < pr.Blocks.Length && pr.Blocks[thisTarget].Textures[2].Tipo == 0x0007;
+            Console.WriteLine($"  refRoom[{ri}] (x,z)=({x},{z}) wants PositiveX_QA: our own(x+1,z) slot2 set={ownSlotSet}  our (x,z) slot2 set={thisSlotSet}");
+        }
+    }
+}
+
+// --- Deep dive: room0 seam x=1/x=2, z=3 (PositiveX_QA genuinely missing) ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Deep dive: room0 seam x=1/x=2 z=3 ---");
+    var r1 = level.Rooms[0];
+    var pr = prj.Rooms[0];
+    int ownTarget = 2 * pr.ZSize + 3;
+    int neighTarget = 1 * pr.ZSize + 3;
+    var own = pr.Blocks[ownTarget];
+    var neigh = pr.Blocks[neighTarget];
+    Console.WriteLine($"own(2,3): QA[2]=0x{own.Textures[2].Tipo:X4} Mid[4]=0x{own.Textures[4].Tipo:X4} WS[3]=0x{own.Textures[3].Tipo:X4}");
+    Console.WriteLine($"own Floor={own.Floor} Ceiling={own.Ceiling} FloorCorner=[{string.Join(",",own.FloorCorner)}]");
+    Console.WriteLine($"neigh(1,3) Floor={neigh.Floor} Ceiling={neigh.Ceiling} FloorCorner=[{string.Join(",",neigh.FloorCorner)}]");
+
+    bool IsBorderOrSolidLocal(PRJ2_Extractor.Models.LevelRoom room, int x, int z)
+    {
+        if (x < 0 || z < 0 || x >= room.NumX || z >= room.NumZ) return true;
+        if (x == 0 || x == room.NumX - 1 || z == 0 || z == room.NumZ - 1) return true;
+        int idx = x * room.NumZ + z;
+        if (idx < 0 || idx >= room.Sectors.Length) return true;
+        return room.Sectors[idx].Floor == -127;
+    }
+    Console.WriteLine($"neighborUnreliable(1,3)={IsBorderOrSolidLocal(r1,1,3)}");
+
+    int seamWorldX = 2*1024;
+    int count = 0;
+    foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+    {
+        var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+        int minX = verts.Min(v=>(int)v.X), maxX = verts.Max(v=>(int)v.X);
+        int minZ = verts.Min(v=>(int)v.Z), maxZ = verts.Max(v=>(int)v.Z);
+        if (Math.Abs(maxX-minX) > 8) continue;
+        int avgX = (int)verts.Average(v=>(int)v.X);
+        if (Math.Abs(avgX - seamWorldX) > 64) continue;
+        int avgZ = (int)verts.Average(v=>(int)v.Z);
+        if (avgZ < 3*1024-64 || avgZ > 4*1024+64) continue;
+        count++;
+        int avgY = (int)verts.Average(v=>(int)v.Y);
+        int minY = verts.Min(v=>(int)v.Y), maxY = verts.Max(v=>(int)v.Y);
+        Console.WriteLine($"  Real X-wall quad #{count}: tex={f.Texture} avgY={avgY} Yrange=[{minY},{maxY}]");
+    }
+    Console.WriteLine($"Total real quads at this seam: {count}");
+}
+
+// --- Deep dive: room0 (5,1) X-wall WS missing ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Deep dive: room0 (5,1) X-wall ---");
+    var r1 = level.Rooms[0];
+    var pr = prj.Rooms[0];
+    int ownTarget = 5 * pr.ZSize + 1;
+    int neighTarget = 4 * pr.ZSize + 1;
+    var own = pr.Blocks[ownTarget];
+    var neigh = pr.Blocks[neighTarget];
+    Console.WriteLine($"own(5,1): QA[2]=0x{own.Textures[2].Tipo:X4} Mid[4]=0x{own.Textures[4].Tipo:X4} WS[3]=0x{own.Textures[3].Tipo:X4}");
+    Console.WriteLine($"own Floor={own.Floor} Ceiling={own.Ceiling} CeilCorner=[{string.Join(",",own.CeilCorner)}]");
+    Console.WriteLine($"neigh(4,1) Floor={neigh.Floor} Ceiling={neigh.Ceiling} CeilCorner=[{string.Join(",",neigh.CeilCorner)}]");
+
+    bool IsBorderOrSolidLocal(PRJ2_Extractor.Models.LevelRoom room, int x, int z)
+    {
+        if (x < 0 || z < 0 || x >= room.NumX || z >= room.NumZ) return true;
+        if (x == 0 || x == room.NumX - 1 || z == 0 || z == room.NumZ - 1) return true;
+        int idx = x * room.NumZ + z;
+        if (idx < 0 || idx >= room.Sectors.Length) return true;
+        return room.Sectors[idx].Floor == -127;
+    }
+    Console.WriteLine($"neighborUnreliable(4,1)={IsBorderOrSolidLocal(r1,4,1)}");
+
+    int seamWorldX = 5*1024;
+    int count = 0;
+    foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+    {
+        var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+        int minX = verts.Min(v=>(int)v.X), maxX = verts.Max(v=>(int)v.X);
+        int minZ = verts.Min(v=>(int)v.Z), maxZ = verts.Max(v=>(int)v.Z);
+        if (Math.Abs(maxX-minX) > 8) continue;
+        int avgX = (int)verts.Average(v=>(int)v.X);
+        if (Math.Abs(avgX - seamWorldX) > 64) continue;
+        int avgZ = (int)verts.Average(v=>(int)v.Z);
+        if (avgZ < 1*1024-64 || avgZ > 2*1024+64) continue;
+        count++;
+        int avgY = (int)verts.Average(v=>(int)v.Y);
+        int minY = verts.Min(v=>(int)v.Y), maxY = verts.Max(v=>(int)v.Y);
+        Console.WriteLine($"  Real X-wall quad #{count}: tex={f.Texture} avgY={avgY} Yrange=[{minY},{maxY}]");
+    }
+    Console.WriteLine($"Total real quads: {count}");
+}
+
+// --- Fresh bulk WS investigation (post-mirroring-fix) ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Fresh bulk WS missing-with-geometry check ---");
+    var wsFaces = new Dictionary<SectorFace,(int slot,bool isX)> {
+        [SectorFace.Wall_NegativeX_WS] = (3,true), [SectorFace.Wall_PositiveX_WS] = (3,true),
+        [SectorFace.Wall_NegativeZ_WS] = (6,false), [SectorFace.Wall_PositiveZ_WS] = (6,false),
+    };
+    int totalMissing = 0, hasGeom = 0, noGeom = 0;
+    var fixableSamples = new List<(int room,int x,int z,bool isX,string face)>();
+
+    for (int ri = 0; ri < refRooms.Count; ri++)
+    {
+        var refRoom = refRooms[ri];
+        var r1 = level.Rooms.FirstOrDefault(rr => Math.Abs(rr.X - refRoom.Position.X * 1024) < 1100 && Math.Abs(rr.Z - refRoom.Position.Z * 1024) < 1100);
+        if (r1 == null) continue;
+        int roomIdx = Array.IndexOf(level.Rooms, r1);
+        var pr = prj.Rooms[roomIdx];
+
+        for (int x = 0; x < refRoom.NumXSectors && x < pr.XSize; x++)
+        for (int z = 0; z < refRoom.NumZSectors && z < pr.ZSize; z++)
+        {
+            foreach (var kv in wsFaces)
+            {
+                if (!refRoom.Sectors[x, z].GetFaceTextures().ContainsKey(kv.Key)) continue;
+                int target = x * pr.ZSize + z;
+                if (target < 0 || target >= pr.Blocks.Length) continue;
+                if (pr.Blocks[target].Textures[kv.Value.slot].Tipo == 0x0007) continue; // already set
+                totalMissing++;
+
+                bool isX = kv.Value.isX;
+                int seamWorldX = isX ? x * 1024 : 0;
+                int seamWorldZ = isX ? 0 : z * 1024;
+                bool found = false;
+                foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+                {
+                    var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+                    int fminX = verts.Min(v=>(int)v.X), fmaxX = verts.Max(v=>(int)v.X);
+                    int fminZ = verts.Min(v=>(int)v.Z), fmaxZ = verts.Max(v=>(int)v.Z);
+                    if (isX)
+                    {
+                        if (Math.Abs(fmaxX-fminX) > 8) continue;
+                        int avgX = (int)verts.Average(v=>(int)v.X);
+                        if (Math.Abs(avgX - seamWorldX) > 64) continue;
+                        int avgZ = (int)verts.Average(v=>(int)v.Z);
+                        if (avgZ < z*1024 - 64 || avgZ > (z+1)*1024 + 64) continue;
+                    }
+                    else
+                    {
+                        if (Math.Abs(fmaxZ-fminZ) > 8) continue;
+                        int avgZ2 = (int)verts.Average(v=>(int)v.Z);
+                        if (Math.Abs(avgZ2 - seamWorldZ) > 64) continue;
+                        int avgX2 = (int)verts.Average(v=>(int)v.X);
+                        if (avgX2 < x*1024 - 64 || avgX2 > (x+1)*1024 + 64) continue;
+                    }
+                    found = true; break;
+                }
+                if (found) { hasGeom++; if (fixableSamples.Count < 10) fixableSamples.Add((roomIdx,x,z,isX,kv.Key.ToString())); }
+                else noGeom++;
+            }
+        }
+    }
+    Console.WriteLine($"Missing WS: {totalMissing}  hasRealGeometry={hasGeom}  noGeometry={noGeom}");
+    Console.WriteLine("Fixable samples:");
+    foreach (var s in fixableSamples) Console.WriteLine($"  room={s.room} x={s.x} z={s.z} isX={s.isX} face={s.face}");
+}
+
+// --- Deep dive: room2 (8,1) X-wall WS missing ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Deep dive: room2 (8,1) X-wall ---");
+    var r1 = level.Rooms[2];
+    var pr = prj.Rooms[2];
+    int ownTarget = 8 * pr.ZSize + 1;
+    int neighTarget = 7 * pr.ZSize + 1;
+    var own = pr.Blocks[ownTarget];
+    var neigh = pr.Blocks[neighTarget];
+    Console.WriteLine($"own(8,1): QA[2]=0x{own.Textures[2].Tipo:X4} Mid[4]=0x{own.Textures[4].Tipo:X4} WS[3]=0x{own.Textures[3].Tipo:X4}");
+    Console.WriteLine($"own Floor={own.Floor} Ceiling={own.Ceiling} CeilCorner=[{string.Join(",",own.CeilCorner)}]");
+    Console.WriteLine($"neigh(7,1) Floor={neigh.Floor} Ceiling={neigh.Ceiling} CeilCorner=[{string.Join(",",neigh.CeilCorner)}]");
+
+    bool IsBorderOrSolidLocal(PRJ2_Extractor.Models.LevelRoom room, int x, int z)
+    {
+        if (x < 0 || z < 0 || x >= room.NumX || z >= room.NumZ) return true;
+        if (x == 0 || x == room.NumX - 1 || z == 0 || z == room.NumZ - 1) return true;
+        int idx = x * room.NumZ + z;
+        if (idx < 0 || idx >= room.Sectors.Length) return true;
+        return room.Sectors[idx].Floor == -127;
+    }
+    Console.WriteLine($"neighborUnreliable(7,1)={IsBorderOrSolidLocal(r1,7,1)}");
+
+    int seamWorldX = 8*1024;
+    int count = 0;
+    foreach (var f in r1.Rectangles.Concat(r1.Triangles))
+    {
+        var verts = f.Vertices.Select(vi => r1.Vertices[vi]).ToArray();
+        int minX = verts.Min(v=>(int)v.X), maxX = verts.Max(v=>(int)v.X);
+        int minZ = verts.Min(v=>(int)v.Z), maxZ = verts.Max(v=>(int)v.Z);
+        if (Math.Abs(maxX-minX) > 8) continue;
+        int avgX = (int)verts.Average(v=>(int)v.X);
+        if (Math.Abs(avgX - seamWorldX) > 64) continue;
+        int avgZ = (int)verts.Average(v=>(int)v.Z);
+        if (avgZ < 1*1024-64 || avgZ > 2*1024+64) continue;
+        count++;
+        int avgY = (int)verts.Average(v=>(int)v.Y);
+        int minY = verts.Min(v=>(int)v.Y), maxY = verts.Max(v=>(int)v.Y);
+        Console.WriteLine($"  Real X-wall quad #{count}: tex={f.Texture} avgY={avgY} Yrange=[{minY},{maxY}]");
+    }
+    Console.WriteLine($"Total real quads: {count}");
+}
+
+// --- Verify hypothesis: does the reference put WS on pure-floor-difference (no ceiling diff) seams? ---
+{
+    Console.WriteLine();
+    Console.WriteLine("--- Hypothesis check: WS on seams with NO ceiling difference ---");
+    int checkedSeams = 0, wsWithNoCeilDiff = 0, wsWithCeilDiff = 0, qaWsTogetherNoCeilDiff = 0;
+
+    for (int ri = 0; ri < refRooms.Count; ri++)
+    {
+        var refRoom = refRooms[ri];
+        var r1 = level.Rooms.FirstOrDefault(rr => Math.Abs(rr.X - refRoom.Position.X * 1024) < 1100 && Math.Abs(rr.Z - refRoom.Position.Z * 1024) < 1100);
+        if (r1 == null) continue;
+        int roomIdx = Array.IndexOf(level.Rooms, r1);
+        var pr = prj.Rooms[roomIdx];
+
+        for (int x = 1; x < refRoom.NumXSectors && x < pr.XSize; x++)
+        for (int z = 0; z < refRoom.NumZSectors && z < pr.ZSize; z++)
+        {
+            bool hasWs = refRoom.Sectors[x, z].GetFaceTextures().ContainsKey(SectorFace.Wall_NegativeX_WS);
+            bool hasQa = refRoom.Sectors[x, z].GetFaceTextures().ContainsKey(SectorFace.Wall_NegativeX_QA);
+            if (!hasWs && !hasQa) continue;
+
+            int ownTarget = x * pr.ZSize + z;
+            int neighTarget = (x - 1) * pr.ZSize + z;
+            if (ownTarget >= pr.Blocks.Length || neighTarget >= pr.Blocks.Length) continue;
+            var own = pr.Blocks[ownTarget];
+            var neigh = pr.Blocks[neighTarget];
+
+            bool ceilFlat = own.CeilCorner.All(c => c == 0) && neigh.CeilCorner.All(c => c == 0);
+            bool noCeilDiff = ceilFlat && own.Ceiling == neigh.Ceiling;
+            bool floorFlat = own.FloorCorner.All(c => c == 0) && neigh.FloorCorner.All(c => c == 0);
+            bool floorDiffers = own.Floor != neigh.Floor;
+
+            checkedSeams++;
+            if (hasWs)
+            {
+                if (noCeilDiff) wsWithNoCeilDiff++; else wsWithCeilDiff++;
+            }
+            if (hasWs && hasQa && noCeilDiff && floorFlat && floorDiffers) qaWsTogetherNoCeilDiff++;
+        }
+    }
+    Console.WriteLine($"Seams checked (with QA or WS in reference): {checkedSeams}");
+    Console.WriteLine($"WS present WITH no ceiling difference at all: {wsWithNoCeilDiff}");
+    Console.WriteLine($"WS present WITH a real ceiling difference:    {wsWithCeilDiff}");
+    Console.WriteLine($"QA+WS together, flat floor+ceiling on both sides but floor height differs (pure floor-step split into both tiers): {qaWsTogetherNoCeilDiff}");
+}
 return 0;

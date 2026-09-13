@@ -1371,16 +1371,77 @@ public class TrLevel : IDisposable
     private static void ApplyRoomMeshTextures(PrjRoom prjRoom, LevelRoom levelRoom, ObjectTexture[] objectTextures)
     {
         // Seam key (ownX, ownZ, isXDirection) -> quads awaiting rank-based tier assignment (see
-        // FlushUnreliableWallSeams). Only used for the "unreliable neighbor" case (border/solid-rock
-        // walls) -- reliable-neighbor walls still classify and write immediately as before.
+        // FlushUnreliableWallSeams). Used for two cases: (a) "unreliable neighbor" seams (border/
+        // solid-rock walls, where the neighbor sector's Floor/Ceiling carry no real geometric
+        // meaning), and (b) any seam -- reliable neighbor or not -- with 3+ real compiled wall quads,
+        // since the per-corner comparison (2 shared corners) can only ever express up to 3 tiers and
+        // was found to silently drop QA/WS on seams with more real quads even when both sides'
+        // heights were perfectly legitimate (verified: alexhub2 room1 seam x=2/x=1,z=4 -- own and
+        // neighbor both had real, distinct corner heights, but the reference's own 5-tier assignment
+        // there [QA/Floor2/Middle/Ceiling2/WS] simply can't be derived from a 2-corner comparison).
         var pending = new Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>>();
+        var seamQuadCounts = CountWallQuadsPerSeam(levelRoom, prjRoom);
 
         foreach (var face in levelRoom.Rectangles)
-            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures, pending);
+            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures, pending, seamQuadCounts);
         foreach (var face in levelRoom.Triangles)
-            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures, pending);
+            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures, pending, seamQuadCounts);
 
         FlushUnreliableWallSeams(prjRoom, objectTextures, pending);
+    }
+
+    /// <summary>
+    /// First pass over a room's wall-shaped faces (mirrors the X-wall/Z-wall detection and
+    /// BlockRange coverage of ApplyRoomFaceTexture, but only counts -- no texture assignment yet).
+    /// Used by ApplyWallFace to decide, per seam, whether the simple 2-corner comparison can even
+    /// represent the real geometry there (see ApplyRoomMeshTextures' comment).
+    /// </summary>
+    private static Dictionary<(int, int, bool), int> CountWallQuadsPerSeam(LevelRoom levelRoom, PrjRoom prjRoom)
+    {
+        var counts = new Dictionary<(int, int, bool), int>();
+        void Count(int ownX, int ownZ, bool isXDirection)
+        {
+            var key = (ownX, ownZ, isXDirection);
+            counts.TryGetValue(key, out int c);
+            counts[key] = c + 1;
+        }
+
+        const int epsilon = 8;
+        foreach (var face in levelRoom.Rectangles.Concat(levelRoom.Triangles))
+        {
+            var vertices = face.Vertices
+                .Where(v => v < levelRoom.Vertices.Length)
+                .Select(v => levelRoom.Vertices[v])
+                .ToArray();
+            if (vertices.Length != face.Vertices.Length) continue;
+
+            int minX = vertices.Min(v => v.X), maxX = vertices.Max(v => v.X);
+            int minZ = vertices.Min(v => v.Z), maxZ = vertices.Max(v => v.Z);
+            int avgX = (int)Math.Round(vertices.Average(v => v.X));
+            int avgZ = (int)Math.Round(vertices.Average(v => v.Z));
+
+            bool looksLikeXWall = Math.Abs(maxX - minX) <= epsilon;
+            bool looksLikeZWall = Math.Abs(maxZ - minZ) <= epsilon;
+            if (!looksLikeXWall && !looksLikeZWall) continue; // floor/ceiling, not a wall
+
+            if (looksLikeXWall)
+            {
+                int seamX = (int)Math.Round(avgX / 1024.0);
+                bool isInteriorSeam = seamX > 0 && seamX < prjRoom.XSize;
+                int ownX = isInteriorSeam ? seamX : Math.Clamp(seamX, 0, prjRoom.XSize - 1);
+                var (bz0, bz1) = BlockRange(minZ, maxZ, prjRoom.ZSize);
+                for (int bz = bz0; bz <= bz1; bz++) Count(ownX, bz, true);
+            }
+            else
+            {
+                int seamZ = (int)Math.Round(avgZ / 1024.0);
+                bool isInteriorSeam = seamZ > 0 && seamZ < prjRoom.ZSize;
+                int ownZ = isInteriorSeam ? seamZ : Math.Clamp(seamZ, 0, prjRoom.ZSize - 1);
+                var (bx0, bx1) = BlockRange(minX, maxX, prjRoom.XSize);
+                for (int bx = bx0; bx <= bx1; bx++) Count(bx, ownZ, false);
+            }
+        }
+        return counts;
     }
 
     /// <summary>
@@ -1434,7 +1495,8 @@ public class TrLevel : IDisposable
     /// a room wasn't square (NumX != NumZ).
     /// </summary>
     private static void ApplyRoomFaceTexture(PrjRoom prjRoom, LevelRoom levelRoom, RoomFace face, ObjectTexture[] objectTextures,
-        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>> pending)
+        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>> pending,
+        Dictionary<(int, int, bool), int> seamQuadCounts)
     {
         int textureIndex = face.Texture & 0x7FFF;
         // BlockTex.Index is now a full int (see its field comment), so no artificial 1024-entry
@@ -1529,7 +1591,8 @@ public class TrLevel : IDisposable
             var (bz0, bz1) = BlockRange(minZ, maxZ, prjRoom.ZSize);
             for (int bz = bz0; bz <= bz1; bz++)
             {
-                bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, neighborX, bz);
+                bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, neighborX, bz) ||
+                    seamQuadCounts.GetValueOrDefault((ownX, bz, true)) >= 3;
                 ApplyWallFace(prjRoom, ownX, bz, neighborX, bz, avgY, textureIndex, face, objectTextures,
                     qaSlot: 2, middleSlot: 4, wsSlot: 3, neighborUnreliable, pending);
             }
@@ -1545,7 +1608,8 @@ public class TrLevel : IDisposable
             var (bx0, bx1) = BlockRange(minX, maxX, prjRoom.XSize);
             for (int bx = bx0; bx <= bx1; bx++)
             {
-                bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, bx, neighborZ);
+                bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, bx, neighborZ) ||
+                    seamQuadCounts.GetValueOrDefault((bx, ownZ, false)) >= 3;
                 ApplyWallFace(prjRoom, bx, ownZ, bx, neighborZ, avgY, textureIndex, face, objectTextures,
                     qaSlot: 5, middleSlot: 7, wsSlot: 6, neighborUnreliable, pending);
             }
@@ -1697,24 +1761,35 @@ public class TrLevel : IDisposable
                     neighCeilB = GetCornerCeilY(neighborBlock, xp: true, zp: true);
                 }
 
-                // QA exists on "own" only where own's floor is higher (smaller raw-Y) than the
-                // neighbor's -- mirrors SectorWallData's "yStartA <= yEndA && yStartB <= yEndB =>
-                // skip" zero/negative-height check. Evaluated PER CORNER: a corner where own is NOT
-                // higher contributes no real geometry there, so it must not widen the Y-band (doing
-                // so was the source of the Middle-tier false positives in the previous attempt).
+                // QA occupies this shared slot when EITHER side has real step geometry here: own's
+                // floor higher than neighbor's (own's own QA face) OR neighbor's floor higher than
+                // own's (neighbor's +X/+Z QA face, mirrored into this same physical slot per the
+                // classic-PRJ storage convention -- verified in PrjLoader.cs: slot 2/5 always lives on
+                // the higher-index sector regardless of which side geometrically owns the step).
+                // Missing the mirrored direction was a real bug: any seam where the NEIGHBOR (not
+                // own) had the taller floor fell through entirely to Middle, even with a real
+                // compiled quad present (verified: alexhub2 room0 seam x=1/x=2,z=3 -- neighbor's
+                // sloped floor was higher there, own's flat floor was not, so hasQaOnOwn was always
+                // false under the own-only test despite a real, correctly-shaped QA quad existing).
                 bool qaValidA = ownFloorA < neighFloorA;
                 bool qaValidB = ownFloorB < neighFloorB;
-                bool hasQaOnOwn = qaValidA || qaValidB;
+                bool qaMirrorValidA = neighFloorA < ownFloorA;
+                bool qaMirrorValidB = neighFloorB < ownFloorB;
+                bool hasQaOnOwn = qaValidA || qaValidB || qaMirrorValidA || qaMirrorValidB;
 
                 bool wsValidA = ownCeilA > neighCeilA;
                 bool wsValidB = ownCeilB > neighCeilB;
-                bool hasWsOnOwn = wsValidA || wsValidB;
+                bool wsMirrorValidA = neighCeilA > ownCeilA;
+                bool wsMirrorValidB = neighCeilB > ownCeilB;
+                bool hasWsOnOwn = wsValidA || wsValidB || wsMirrorValidA || wsMirrorValidB;
 
                 if (hasQaOnOwn)
                 {
                     int loF = int.MaxValue, hiF = int.MinValue;
                     if (qaValidA) { loF = Math.Min(loF, ownFloorA); hiF = Math.Max(hiF, neighFloorA); }
                     if (qaValidB) { loF = Math.Min(loF, ownFloorB); hiF = Math.Max(hiF, neighFloorB); }
+                    if (qaMirrorValidA) { loF = Math.Min(loF, neighFloorA); hiF = Math.Max(hiF, ownFloorA); }
+                    if (qaMirrorValidB) { loF = Math.Min(loF, neighFloorB); hiF = Math.Max(hiF, ownFloorB); }
                     if (avgY >= loF && avgY <= hiF) slot = qaSlot;
                 }
                 if (slot == middleSlot && hasWsOnOwn)
@@ -1722,6 +1797,8 @@ public class TrLevel : IDisposable
                     int loC = int.MaxValue, hiC = int.MinValue;
                     if (wsValidA) { loC = Math.Min(loC, neighCeilA); hiC = Math.Max(hiC, ownCeilA); }
                     if (wsValidB) { loC = Math.Min(loC, neighCeilB); hiC = Math.Max(hiC, ownCeilB); }
+                    if (wsMirrorValidA) { loC = Math.Min(loC, ownCeilA); hiC = Math.Max(hiC, neighCeilA); }
+                    if (wsMirrorValidB) { loC = Math.Min(loC, ownCeilB); hiC = Math.Max(hiC, neighCeilB); }
                     if (avgY >= loC && avgY <= hiC) slot = wsSlot;
                 }
             }
