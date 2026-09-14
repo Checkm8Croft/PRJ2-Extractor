@@ -219,6 +219,43 @@ The existing `hasQaOnOwn`/`hasWsOnOwn` tests (2.1) only checked "own's floor/cei
 
 **Result:** wall-tier match 90.70% → **92.18%** (biggest single jump of the wall-tier work). The QA Positive/Negative asymmetry is now gone: all four directions sit in a tight 64.4%–67.2% band (previously 9.7%–65%). WS improved and became far more uniform too: 21.1%–27.7% across all four directions (previously 5.7%–22.1%, badly skewed). Overall level coverage: ~72.9% → **~71.4%**
 
+### 2.14 — WS-without-ceiling-diff: hypothesis tested and REJECTED (structural limit, not a bug)
+
+**Hypothesis (carried over from prior session):** WS is "the upper band of any real step," not
+strictly ceiling-difference-driven. Confirmed as a real pattern: of 253 reference seams with QA or WS
+present, 168 have WS with no ceiling difference at all (vs 85 where WS coincides with a real ceiling
+delta). Two candidate fixes were tried and both failed:
+
+**Attempt 1 — defer every QA-without-ceiling-diff seam with 2+ real compiled quads to the existing
+rank-based path (FlushUnreliableWallSeams):** wall-tier match 92.18% → 91.99% (regression). WS false
+negatives did drop (234→215 / 281→264 across the two directions) but WS/Middle false positives grew
+faster (94→150 / 101→180), because the rule forced a QA+WS split on every qualifying seam regardless
+of whether the reference actually wanted one there.
+
+**Attempt 2 — check whether real quad count (raw or distinct-texture) separates the seams that
+genuinely want a WS split from those that don't**, before trying a narrower version of the same fix.
+Measured directly on the 275 seams (our own per-corner test: QA present, no ceiling diff) where the
+reference DOES want WS vs the 680 where it doesn't:
+
+| | refHasWs=True (n=275) | refHasWs=False (n=680) |
+|---|---|---|
+| quadCount=1 | 114 (41%) | 466 (69%) |
+| quadCount=2 | 87 (32%) | 200 (29%) |
+| quadCount>=3 | 74 (27%) | 14 (2%) |
+
+Distinct-texture quad count gave essentially the same distribution (no improvement over raw count).
+Two disqualifying findings: (a) 41% of the true-WS seams have only 1 real compiled quad -- no
+rank-based split can ever recover these, since ranking needs 2+ items; (b) at quadCount=2 the two
+populations overlap almost exactly (32% vs 29%), so even a stricter ">=2 real quads" gate would still
+misfire on roughly as many negatives as it fixed positives.
+
+**Conclusion:** WS-without-ceiling-diff is not derivable from the geometry this extractor reconstructs
+(corner heights + compiled quad boundaries). The likely real signal is how the seam was actually drawn
+in the original Tomb Editor project (explicit QA/WS split placement), which does not survive TR4
+compilation in any form we can recover. Treated as a structural limit alongside Floor2/Ceiling2 (see
+2.7) rather than a bug to keep chasing -- do not retry a quad-count-based rule here without a new,
+different signal.
+
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
