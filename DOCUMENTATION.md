@@ -287,6 +287,33 @@ an independently fixable target.
 *neither* QA, WS, nor Middle at that sector face at all (not just misclassified -- spurious). Not yet
 investigated; a real, smaller, separately-addressable bug for a future session.
 
+### 2.16 — The 156 spurious-Middle cases: one real contributing pattern found (29.9%), majority still unexplained
+
+**Question:** of the 156 spurious Middle entries flagged in 2.15 (ours has Middle, ref has NEITHER
+QA/WS/Middle at that exact face), what's actually going on?
+
+**Check 1 — ownership flip:** does the reference instead express the same physical seam via the
+MIRROR (opposite-owner) sector face? Only 2 of 156 (1.3%) -- not an ownership-side resolution issue,
+ruled out almost entirely. 154 (98.7%) are genuinely phantom on both sides.
+
+**Check 2 — sector Type misclassification.** Deep dive on one concrete case (room 3, sector (3,1),
+`Wall_PositiveZ_Middle`) found: our raw TR4 parsing classifies this sector's `Block.Id = 0x0E`
+(solid Wall), while the reference classifies the *same sector* as `Type=Floor` with a real Floor
+texture -- a genuine sector-classification disagreement, not a texture-layer bug at all. Room 3's
+error profile (2.2, "Top 15 rooms": 71/71 errors flat, 0 sloped) is consistent with this kind of
+wholesale Type mismatch rather than a per-seam texture-logic issue.
+
+Generalizing this check across all 154 truly-phantom cases (own `Block.Id` is Wall/BorderWall
+*and* the reference sector is `Type=Floor`): only **46 (29.9%)** match. Real and worth fixing, but
+not the majority explanation -- the room-3 sample doesn't generalize.
+
+**Status:** open. The 46-case Wall/BorderWall-vs-Floor pattern points at `TrLevel`'s raw sector
+Id/FloorData classification (upstream of `Prj2Exporter`'s texture logic entirely -- see
+`Prj2Exporter.cs`'s `sector.Type` switch), not at wall-texture assignment; fixing it belongs with
+sector-type work, not `ApplyWallFace`. The remaining ~108 cases (70.1%) are still unexplained and
+spread across 46 different rooms (heaviest: room 27 with 18, room 3 with 16, rooms 24/25/26/28
+clustered) -- no second pattern identified yet.
+
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
