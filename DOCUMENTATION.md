@@ -256,6 +256,37 @@ compilation in any form we can recover. Treated as a structural limit alongside 
 2.7) rather than a bug to keep chasing -- do not retry a quad-count-based rule here without a new,
 different signal.
 
+### 2.15 — Middle over-assignment "asymmetry": confirmed as spillover from the QA/WS gap, not an independent bug
+
+**Question:** the by-SectorFace-type coverage check shows `Wall_*_Middle` over-assigned 161–256%,
+worse on Negative directions (236–256%) than Positive (161–171%). Is this its own bug, or downstream
+of the already-known QA/WS gap (QA ~65–67%, WS ~21–28%)?
+
+**Method:** `ApplyWallFace`'s `slot` variable starts at `middleSlot` and is only overridden when the
+per-corner test detects a real QA or WS band there -- so any seam where the reference wants QA/WS but
+our per-corner test fails to detect it (the same gap already tracked in 2.13/2.14) falls through to
+Middle by default, rather than being dropped. Tested directly: for every sector where our export
+writes a `Wall_*_Middle` face the reference does NOT have there (a Middle false positive), checked
+whether the reference has QA or WS at that *exact same* sector face instead.
+
+| Direction | Middle FP | ...of which ref has QA/WS there instead | |
+|---|---|---|---|
+| NegativeX | 141 | 107 | 75.9% |
+| PositiveX | 132 | 99 | 75.0% |
+| NegativeZ | 192 | 139 | 72.4% |
+| PositiveZ | 117 | 81 | 69.2% |
+| **Total** | **582** | **426** | **73.2%** |
+
+**Conclusion:** confirmed. ~73% of Middle over-assignment is direct spillover from the QA/WS gap --
+the Negative/Positive asymmetry simply mirrors which direction has the worse QA/WS coverage (see
+2.13's numbers), not a separate Middle-specific bug. Closing the remaining QA/WS gap would
+automatically shrink most of this, so **do not attack Middle over-assignment directly** -- it is not
+an independently fixable target.
+
+**Remaining ~27% (156 of 582) IS a genuinely separate issue**: Middle written where the reference has
+*neither* QA, WS, nor Middle at that sector face at all (not just misclassified -- spurious). Not yet
+investigated; a real, smaller, separately-addressable bug for a future session.
+
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
