@@ -314,6 +314,36 @@ sector-type work, not `ApplyWallFace`. The remaining ~108 cases (70.1%) are stil
 spread across 46 different rooms (heaviest: room 27 with 18, room 3 with 16, rooms 24/25/26/28
 clustered) -- no second pattern identified yet.
 
+### 2.17 -- Singleton-quad "unreliable" seams were discarding a real, usable ceiling/floor difference
+
+**Investigation:** picked up the 22 flat-floor WS false negatives (out of 216) that DO have a real
+ceiling difference (1-9 clicks) our per-corner test should already catch -- distinct from the 194
+that are 2.14's structural limit. Sampled 8 concrete cases: 7 of 8 involved a neighbor (or own)
+sector with `Id=0x1E`/`0x06` (BorderWall). In every sample, `Mid slot Tipo=7` (assigned) while
+`QA slot Tipo=0` and `WS slot Tipo=0` (never even attempted).
+
+**Root cause:** `IsBorderOrSolid` correctly flags these seams as "unreliable" (the neighbor's
+Floor/Ceiling is room-boundary-flattened, not real per-sector data -- see 2.1's sub-fix and
+`IsBorderOrSolid`'s own doc comment), routing them to `FlushUnreliableWallSeams`'s rank-based path
+instead of the per-corner test. But for a seam with only ONE real compiled quad, that path had no
+rank to compute and unconditionally defaulted to Middle -- discarding the own/neighbor height data
+entirely, even though (per the doc comment's own reasoning) a genuine NONZERO difference there is
+real, physically-derived geometry, not the coincidental-equality false-negative case the
+"unreliable" flag was actually meant to guard against.
+
+**Fix:** `FlushUnreliableWallSeams`'s singleton-quad branch now attempts the same per-corner QA/WS
+test `ApplyWallFace` uses (via the shared `GetCornerFloorY`/`GetCornerCeilY` helpers) before giving
+up to Middle: a clean single-sided difference (floor differs but not ceiling, or vice versa) picks
+QA/WS; both differing (the lone quad spans the full range) or neither differing still falls back to
+Middle exactly as before, so seams the old behavior already got right are unchanged.
+
+**Result:** wall-tier match 92.18% -> **92.38%**, no regression on any tier. QA/WS coverage improved
+on 3 of 4 directions (`Wall_PositiveX_WS` 27.7%->30.6%, `Wall_PositiveZ_WS` 22.1%->24.1%,
+`Wall_PositiveX_QA` 67.2%->73.4%, `Wall_PositiveZ_QA` 66.9%->70.1%; Negative directions unchanged --
+the pattern this fix catches happens to skew Positive-owned in this level). Middle over-assignment
+dropped on the same two directions (`Wall_PositiveX_Middle` 170.8%->142.5%,
+`Wall_PositiveZ_Middle` 161.3%->138.7%), consistent with 2.15's spillover finding.
+
 ---
 
 ## Key structural lessons (apply to future work on this codebase)

@@ -1472,11 +1472,62 @@ public class TrLevel : IDisposable
             int wsSlot = isXDirection ? 3 : 6;
 
             var sorted = quads.OrderByDescending(q => q.avgY).ToList();
+
+            if (sorted.Count == 1)
+            {
+                // A lone quad has nothing to rank against, but if this seam has a real, in-bounds
+                // neighbor (a border/solid-rock-neighbor seam, not a genuine room edge), the own/
+                // neighbor corner heights are still real, physically-derived data -- even a
+                // room-boundary-flattened neighbor height (see IsBorderOrSolid) correctly reflects
+                // the compiled wall quad's real extent. IsBorderOrSolid's own doc comment describes
+                // the risk this guards against as a flattened height COINCIDENTALLY EQUALING the
+                // true neighbor height (hiding a real step), not a genuine nonzero difference being
+                // wrong -- so attempt the same per-corner QA/WS test ApplyWallFace uses, and only
+                // fall back to Middle when it finds no clean single-sided difference (matching the
+                // previous unconditional-Middle behavior for every case that was already correct).
+                int neighX = isXDirection ? ownX - 1 : ownX;
+                int neighZ = isXDirection ? ownZ : ownZ - 1;
+                int neighTarget = neighX * prjRoom.ZSize + neighZ;
+                int slot = middleSlot;
+                if (neighX >= 0 && neighZ >= 0 && neighX < prjRoom.XSize && neighZ < prjRoom.ZSize &&
+                    neighTarget >= 0 && neighTarget < prjRoom.Blocks.Length)
+                {
+                    var own = prjRoom.Blocks[target];
+                    var neigh = prjRoom.Blocks[neighTarget];
+                    int ownFloorA, ownFloorB, neighFloorA, neighFloorB, ownCeilA, ownCeilB, neighCeilA, neighCeilB;
+                    if (isXDirection)
+                    {
+                        ownFloorA = GetCornerFloorY(own, false, false); ownFloorB = GetCornerFloorY(own, false, true);
+                        neighFloorA = GetCornerFloorY(neigh, true, false); neighFloorB = GetCornerFloorY(neigh, true, true);
+                        ownCeilA = GetCornerCeilY(own, false, false); ownCeilB = GetCornerCeilY(own, false, true);
+                        neighCeilA = GetCornerCeilY(neigh, true, false); neighCeilB = GetCornerCeilY(neigh, true, true);
+                    }
+                    else
+                    {
+                        ownFloorA = GetCornerFloorY(own, false, false); ownFloorB = GetCornerFloorY(own, true, false);
+                        neighFloorA = GetCornerFloorY(neigh, false, true); neighFloorB = GetCornerFloorY(neigh, true, true);
+                        ownCeilA = GetCornerCeilY(own, false, false); ownCeilB = GetCornerCeilY(own, true, false);
+                        neighCeilA = GetCornerCeilY(neigh, false, true); neighCeilB = GetCornerCeilY(neigh, true, true);
+                    }
+                    bool hasQa = ownFloorA < neighFloorA || ownFloorB < neighFloorB || neighFloorA < ownFloorA || neighFloorB < ownFloorB;
+                    bool hasWs = ownCeilA > neighCeilA || ownCeilB > neighCeilB || neighCeilA > ownCeilA || neighCeilB > ownCeilB;
+                    // Both true means the lone quad spans the full floor-to-ceiling difference (a
+                    // genuine standalone Middle band, not a partial QA or WS step); both false means
+                    // no usable difference either. Either way, Middle is the correct call -- only a
+                    // clean single-sided difference picks QA or WS.
+                    if (hasQa && !hasWs) slot = qaSlot;
+                    else if (hasWs && !hasQa) slot = wsSlot;
+                }
+
+                var (_, ti, fc) = sorted[0];
+                SetBlockTexture(prjRoom.Blocks[target].Textures[slot], ti, fc, objectTextures[ti]);
+                continue;
+            }
+
             for (int i = 0; i < sorted.Count; i++)
             {
                 int slot;
-                if (sorted.Count == 1) slot = middleSlot; // can't tell tier from a single isolated quad
-                else if (i == 0) slot = qaSlot;                    // closest to floor
+                if (i == 0) slot = qaSlot;                    // closest to floor
                 else if (i == sorted.Count - 1) slot = wsSlot;     // closest to ceiling
                 else slot = middleSlot;
 
