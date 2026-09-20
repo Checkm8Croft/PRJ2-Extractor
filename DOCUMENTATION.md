@@ -344,6 +344,71 @@ the pattern this fix catches happens to skew Positive-owned in this level). Midd
 dropped on the same two directions (`Wall_PositiveX_Middle` 170.8%->142.5%,
 `Wall_PositiveZ_Middle` 161.3%->138.7%), consistent with 2.15's spillover finding.
 
+### 2.18 — The validation harness itself had a room-matching bug that understated the real score by ~2.4 points (92.38% -> 94.75%)
+
+**Discovery path:** integrated TombIO (TRLevelControl, extracted from TR-Rando, LostArtefacts) as an
+independent, engine-accurate cross-check for our own Floor/Ceiling corner reconstruction. A first pass
+appeared to show a catastrophic, level-wide bug: 485 sectors with a clean, uniform per-sector height
+offset from TombIO's values, concentrated in exactly the rooms already flagged all session as worst
+for wall-tier errors (3, 9, 24-28, 43, 52...). Chasing this down (deep dive on room 3, sector (1,1))
+found the room-matching predicate used throughout `PrjDiag/Program.cs` --
+`Math.Abs(rr.Position.X*1024-r1.X)<1100 && Math.Abs(rr.Position.Z*1024-r1.Z)<1100` -- matches on X/Z
+only. **The level has 28 groups of rooms sharing the same X/Z footprint but different Y** (vertically
+stacked rooms, e.g. a corridor with a room directly below or above it), and `FirstOrDefault` silently
+picks whichever one happens to be first in the reference room list. Every one of the level's most
+error-heavy rooms this whole session (3, 9, 24, 25, 26, 27, 28, 43, 52, 102, and more) belongs to one
+of these 28 groups.
+
+**This is a bug in the validation harness (`PrjDiag/Program.cs`), not in the production code**
+(`TrLevel.cs` / `Prj2Exporter.cs`). Confirmed directly: once the room-match predicate also requires
+`Math.Abs(rr.Position.Y + r1.YBottom) < 300`, the "485 uniform-offset sectors" TombIO finding collapses
+to **zero**, and the primary wall-tier metric (section 1) jumps from **92.38% to 94.75%** on the exact
+same production code, with FN roughly halved (1004 -> 523) and `Mid` FN nearly eliminated (124 -> 17).
+No production code changed between these two numbers -- only how the harness paired our rooms with
+the reference's.
+
+**Consequence for earlier findings:** any section in this document that investigated a *specific named
+room* (2.9's room 2, 2.16's room 3, and others) may have been comparing against the wrong stacked
+neighbor for that room. The room's *identity* (X/Z) was right, but if it belongs to one of the 28
+X/Z-duplicate groups, the *specific reference data* compared against could have been a different
+physical room. Section 1-5's current numbers (94.75% et al.) are now trustworthy; conclusions tied to
+a specific room+sector pair from before this fix should be re-verified before being relied on, since
+some fraction of them may turn out to be comparing against the wrong stacked room.
+
+**Fix applied:** `PrjDiag/Program.cs` now has a single `RoomMatches(rr, r1)` helper (X, Z, and Y) used
+everywhere a reference room is looked up, replacing the ad-hoc X/Z-only inline predicate that had been
+copy-pasted across every section. **Never remove the Y term** -- see the file's own header comment.
+
+**TombIO itself has a real, separate bug** worth noting if it's ever used again: `FDControl.
+GetTriangulationFloor`/`GetTriangulationCeiling`'s sign-extension (`hadj |= 0xFFF0`) doesn't fully sign-
+extend a negative nibble to a 32-bit `int`, producing huge spurious values (~2^24) for certain H1/H2
+triangulation-adjustment inputs. Filtered out as `|diff| > 1,000,000` in the (now-removed) cross-check
+code; not otherwise consequential to this codebase since TombIO was only ever a diagnostic dependency,
+never a production one.
+
+### 2.19 — Real, narrow fix found along the way: outer-ring sectors with a real portal were losing their true Floor/Ceiling
+
+While investigating the (ultimately mostly-false-alarm) uniform-offset pattern, found one genuine,
+smaller bug: `ConvertToPrj` unconditionally flattens every sector on a room's outer ring (`j==0 ||
+j==NumX-1 || k==0 || k==NumZ-1`) to BorderWall (`Id=0x1E`, `Floor=YBottom`, `Ceiling=YTop`), discarding
+the sector's real compiled Floor/Ceiling/FloorData -- with no check for whether a real portal (a
+connection to another room) touches that exact sector. Verified concretely: room 3's sector (0,3) sits
+in the outer ring (column x=0) but has a genuine wall portal to room 6 on its own row; it was being
+flattened despite carrying real walkable floor data.
+
+**Fix:** before the per-sector loop, `ConvertToPrj` now computes `portalTouchedSectors` -- for each of
+the room's real portals, the sector(s) on the boundary that portal actually touches (vertical wall
+portals mark both sectors adjacent to the portal's grid line; horizontal floor/ceiling portals mark
+their exact footprint, no halo). Outer-ring sectors in this set skip the BorderWall-flattening branch
+entirely, keeping their real data.
+
+**Impact:** correctness-only for now -- confirmed via raw data dump that the fix changes the preserved
+Floor/Ceiling for the affected sectors, but it doesn't move the presence-based wall-tier or coverage
+metrics (those only check whether a texture KEY exists, not whether the underlying height is correct),
+so it's invisible to every percentage number in this document. Kept anyway since it's a genuine
+geometry-accuracy fix, scoped to a small, well-understood case (confirmed: only 4 sectors in room 3 are
+actually outer-ring AND portal-touched, out of the 59 sectors a portal's bounding box loosely overlaps).
+
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
@@ -357,6 +422,8 @@ dropped on the same two directions (`Wall_PositiveX_Middle` 170.8%->142.5%,
 - **Validate a heuristic's applicability with real data before implementing it.** The 2.8 rank-based fix was only attempted after measuring that 84.4% of the target seams had ≤3 real quads — confirming the approach could work before spending effort building it, rather than tuning blind.
 - **When a value looks like garbage, check for a documented flag before writing a heuristic to guess around it.** The 2.10 triangle-UV bug could have been "fixed" with a fragile heuristic (e.g. "drop the 4th vertex if it's far from the other 3"), but the real, robust fix was a single documented bit flag (`NewFlags` bit 15) that says outright whether the 4th vertex is meaningful. Always check the spec for an explicit marker before inferring intent from data shape.
 - **A new formula that reuses an already-validated field deserves a direct sign check against the validated code, not just "it produces plausible-looking numbers."** The 2.11 sign bug in `GetCornerFloorY` shipped and contributed to the wall-tier score all session without being caught, because its output still looked reasonable in isolation. It was only caught by comparing one concrete case's computed value against the real compiled geometry's actual Y-range and noticing the result fell outside physically possible bounds. When reusing a field (`FloorCorner`) that another, already-verified code path (`Prj2Exporter.cs`) also consumes, diff the two formulas' signs directly rather than assuming a new use of the same data is correct by association.
+- **The validation harness's own room-matching can silently corrupt every number downstream of it.** This level has 28 groups of rooms sharing an X/Z footprint but stacked at different Y (2.18); an X/Z-only match against the reference picks whichever room happens to come first, and the resulting wrong comparisons look like plausible per-room bugs (concentrated in "problem rooms," consistent-looking offsets) rather than an obviously broken diagnostic. Before trusting a finding tied to a specific room, re-derive that room's identity from ALL its distinguishing coordinates (X, Z, *and* Y/YBottom here), not just the two that are usually enough to be unique.
+- **An independent, differently-sourced ground truth is worth the integration cost when a metric plateaus.** TombIO (TRLevelControl, from TR-Rando/LostArtefacts) — engine-accurate, tested on real files, and *not* derived from this codebase or TombLib — caught the 2.18 harness bug that a whole session of self-consistent internal reasoning against the single existing reference (`alexhub2_orig.prj2`) could not, because every comparison in this document until 2.18 used the same flawed room-matching. A second, structurally different oracle exposes bugs a single source of truth can't.
 
 ---
 

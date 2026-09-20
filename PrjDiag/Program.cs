@@ -12,6 +12,13 @@ using System.Threading;
 // now-documented fix were removed -- restore an old version from git history (`git log -- PrjDiag/Program.cs`)
 // if a similar deep-dive needs to be repeated. Always verify brace balance and the trailing `return 0;`
 // after editing this file; it has previously suffered real corruption from accumulating ad-hoc blocks.
+//
+// IMPORTANT: room matching below checks X, Z, AND Y (Position.Y vs -YBottom) -- NOT just X/Z. The
+// level has 28 groups of rooms sharing the same X/Z footprint but different Y (vertically stacked
+// rooms), and an X/Z-only match silently picks whichever one happens to be first in the reference's
+// room list. This was a real, session-spanning bug in this harness (not in TrLevel.cs) that made the
+// wall-tier match read artificially low (92.38% -> 94.75% once fixed) by comparing dozens of our
+// rooms against the wrong stacked neighbor. Never remove the Y term from these matches.
 
 using var level = new TrLevel();
 byte result = level.Load(@"C:\Users\Checkm8ra1n\Documents\alexhub2.tr4", new Progress<int>(v => { }));
@@ -20,6 +27,10 @@ var prj = level.ConvertToPrj(@"C:\Users\Checkm8ra1n\Documents\alexhub2_test.prj2
 var settings = new Prj2Loader.Settings { IgnoreWads = true, IgnoreTextures = true, IgnoreSoundsCatalogs = true };
 var refLevel = Prj2Loader.LoadFromPrj2(@"C:\Users\Checkm8ra1n\Documents\alexhub2_orig.prj2", null, CancellationToken.None, settings);
 var refRooms = refLevel.Rooms.Where(r => r != null).ToList();
+
+bool RoomMatches(TombLib.LevelData.Room rr, PRJ2_Extractor.Models.LevelRoom r1) =>
+    Math.Abs(rr.Position.X * 1024 - r1.X) < 1100 && Math.Abs(rr.Position.Z * 1024 - r1.Z) < 1100 &&
+    Math.Abs(rr.Position.Y + r1.YBottom) < 300;
 
 // === 1. Ownership-agnostic wall-tier comparison (PRIMARY METRIC) ===
 // Compares presence of a texture at each SEAM (not each sector): does our classification put
@@ -39,7 +50,7 @@ for (int i = 0; i < level.Rooms.Length; i++)
 {
     var r1 = level.Rooms[i];
     var pr = prj.Rooms[i];
-    var refRoom = refRooms.FirstOrDefault(rr => Math.Abs(rr.Position.X * 1024 - r1.X) < 1100 && Math.Abs(rr.Position.Z * 1024 - r1.Z) < 1100);
+    var refRoom = refRooms.FirstOrDefault(rr => RoomMatches(rr, r1));
     if (refRoom == null) continue;
 
     // X-seams (between x and x-1)
@@ -96,7 +107,7 @@ foreach (var kv in byTier)
     {
         var r1 = level.Rooms[i];
         var pr = prj.Rooms[i];
-        var refRoom = refRooms.FirstOrDefault(rr => Math.Abs(rr.Position.X * 1024 - r1.X) < 1100 && Math.Abs(rr.Position.Z * 1024 - r1.Z) < 1100);
+        var refRoom = refRooms.FirstOrDefault(rr => RoomMatches(rr, r1));
         if (refRoom == null) continue;
 
         int roomErr = 0, roomTot = 0, slopedErr = 0, flatErr = 0;
@@ -159,7 +170,7 @@ foreach (var kv in byTier)
     {
         var r1 = level.Rooms[i];
         var pr = prj.Rooms[i];
-        var refRoom = refRooms.FirstOrDefault(rr => Math.Abs(rr.Position.X * 1024 - r1.X) < 1100 && Math.Abs(rr.Position.Z * 1024 - r1.Z) < 1100);
+        var refRoom = refRooms.FirstOrDefault(rr => RoomMatches(rr, r1));
         if (refRoom == null) continue;
         bool IsSloped(PRJ2_Extractor.Models.Block b) => b.FloorCorner.Any(c => c != 0) || b.CeilCorner.Any(c => c != 0);
 

@@ -1146,6 +1146,46 @@ public class TrLevel : IDisposable
             p.Rooms[i].YTop = -r1.YTop / 256;
             p.Rooms[i].Blocks = new Block[r1.NumZ * r1.NumX];
 
+            // Which outer-ring sectors have a real portal (a connection to another room) touching
+            // them, so the border-wall-flattening rule below doesn't discard real Floor/Ceiling/
+            // FloorData for them just because their index happens to be 0 or NumX-1/NumZ-1. Verified
+            // against a concrete case: room 3's sector (0,3) sits in column x=0 (the outer ring) but
+            // has a genuine wall portal to room 6 on its own row -- it was being flattened to
+            // BorderWall (Id=0x1E, Floor=YBottom, Ceiling=YTop) despite carrying real walkable floor
+            // data, which a TombIO cross-check independently confirmed as a systematic per-sector
+            // height mismatch concentrated in exactly this kind of room.
+            var portalTouchedSectors = new HashSet<(int x, int z)>();
+            foreach (var po in r1.Portals)
+            {
+                int minX = po.Vertices.Min(v => (int)v.X), maxX = po.Vertices.Max(v => (int)v.X);
+                int minZ = po.Vertices.Min(v => (int)v.Z), maxZ = po.Vertices.Max(v => (int)v.Z);
+                if (po.Normal.X != 0)
+                {
+                    // Wall portal on a constant-X plane: vertices sit on (or one unit short of) a
+                    // single sector-grid line -- round to find it, then mark the sectors on both
+                    // sides of that line for every Z sector the portal spans.
+                    int gridX = (int)Math.Round(po.Vertices.Average(v => (double)v.X) / 1024.0);
+                    int zLo = minZ / 1024, zHi = (maxZ - 1) / 1024;
+                    for (int z = zLo; z <= zHi; z++) { portalTouchedSectors.Add((gridX - 1, z)); portalTouchedSectors.Add((gridX, z)); }
+                }
+                else if (po.Normal.Z != 0)
+                {
+                    int gridZ = (int)Math.Round(po.Vertices.Average(v => (double)v.Z) / 1024.0);
+                    int xLo = minX / 1024, xHi = (maxX - 1) / 1024;
+                    for (int x = xLo; x <= xHi; x++) { portalTouchedSectors.Add((x, gridZ - 1)); portalTouchedSectors.Add((x, gridZ)); }
+                }
+                else
+                {
+                    // Horizontal (floor/ceiling) portal: its footprint IS the exact sector range,
+                    // no halo needed.
+                    int xLo = minX / 1024, xHi = (maxX - 1) / 1024;
+                    int zLo = minZ / 1024, zHi = (maxZ - 1) / 1024;
+                    for (int x = xLo; x <= xHi; x++)
+                    for (int z = zLo; z <= zHi; z++)
+                        portalTouchedSectors.Add((x, z));
+                }
+            }
+
             // Sectors[] are stored in the file in X-major order (idx = X_idx*NumZ + Z_idx,
             // per TRosettaStone). j = X_idx, k = Z_idx here to read them back correctly.
             for (int j = 0; j < r1.NumX; j++)
@@ -1173,13 +1213,19 @@ public class TrLevel : IDisposable
                 if ((k == 0 && j == 0) || (k == r1.NumZ - 1 && j == 0) ||
                     (k == 0 && j == r1.NumX - 1) || (k == r1.NumZ - 1 && j == r1.NumX - 1))
                 {
-                    block.Id = 0x1E; block.Floor = 0; block.Ceiling = 20;
+                    if (!portalTouchedSectors.Contains((j, k)))
+                    {
+                        block.Id = 0x1E; block.Floor = 0; block.Ceiling = 20;
+                    }
                 }
                 else if (j == 0 || j == r1.NumX - 1 || k == 0 || k == r1.NumZ - 1)
                 {
-                    block.Id = 0x1E;
-                    block.Floor = (short)(-r1.YBottom / 256);
-                    block.Ceiling = (short)(-r1.YTop / 256);
+                    if (!portalTouchedSectors.Contains((j, k)))
+                    {
+                        block.Id = 0x1E;
+                        block.Floor = (short)(-r1.YBottom / 256);
+                        block.Ceiling = (short)(-r1.YTop / 256);
+                    }
                 }
                 else if (sector.Floor == -127)
                 {
