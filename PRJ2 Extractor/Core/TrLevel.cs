@@ -1631,6 +1631,13 @@ public class TrLevel : IDisposable
             // exactly the same value as before (FloorCorner/CeilCorner are all zero there).
             var (bx0, bx1) = BlockRange(minX, maxX, prjRoom.XSize);
             var (bz0, bz1) = BlockRange(minZ, maxZ, prjRoom.ZSize);
+            // Rotation/mirror is a property of the WHOLE face's UV mapping, so compute it once here
+            // (not per covered sector) -- only meaningful for quad Floor faces for now (see
+            // ComputeFloorQuadRotation's own comment); Ceiling and triangulated pieces keep the
+            // previous always-0/false behaviour until that formula is derived too.
+            var (floorRotation, floorFlip) = !face.IsTriangle
+                ? ComputeFloorQuadRotation(vertices, objectTextures[textureIndex].Vertices)
+                : ((byte)0, false);
             for (int bx = bx0; bx <= bx1; bx++)
             for (int bz = bz0; bz <= bz1; bz++)
             {
@@ -1664,7 +1671,10 @@ public class TrLevel : IDisposable
                     bool primaryOccupiedByDifferentTexture = existing.Tipo == 0x0007 && existing.Index != textureIndex;
                     slot = primaryOccupiedByDifferentTexture ? (primarySlot == 0 ? 8 : 9) : primarySlot;
                 }
-                SetBlockTexture(targetBlock.Textures[slot], textureIndex, face, objectTextures[textureIndex]);
+                if (slot == 0 && !face.IsTriangle)
+                    SetBlockTexture(targetBlock.Textures[slot], textureIndex, face, objectTextures[textureIndex], floorRotation, floorFlip);
+                else
+                    SetBlockTexture(targetBlock.Textures[slot], textureIndex, face, objectTextures[textureIndex]);
             }
             return;
         }
@@ -1904,7 +1914,7 @@ public class TrLevel : IDisposable
         SetBlockTexture(prjRoom.Blocks[ownTarget].Textures[slot], textureIndex, face, objectTextures[textureIndex]);
     }
 
-    private static void SetBlockTexture(BlockTex blockTex, int textureIndex, RoomFace face, ObjectTexture texture)
+    private static void SetBlockTexture(BlockTex blockTex, int textureIndex, RoomFace face, ObjectTexture texture, byte rotation = 0, bool flip = false)
     {
         blockTex.Tipo = 0x0007;
         // No more 8/10-bit packing here -- see the BlockTex.Index field comment. Flags1 no longer
@@ -1920,9 +1930,84 @@ public class TrLevel : IDisposable
         // matching PrjLoader's own 0x08 bit convention (BlendMode = Flags1 & 0x08 ? Additive : Normal).
         if (texture.Attribute == 2)
             blockTex.Flags1 |= 0x08;
-        blockTex.Rotation = 0;
+        if (flip)
+            blockTex.Flags1 |= 0x80;
+        blockTex.Rotation = rotation;
         blockTex.Triangle = 0;
         blockTex.Filler = 0;
+    }
+
+    /// <summary>
+    /// Computes the classic-PRJ Rotation (0-3) and mirror-flip flag a Floor/Floor_Triangle2 QUAD
+    /// face needs so that, once decoded by TombLib's PrjLoader-verbatim LoadTextureArea (see
+    /// Prj2Exporter.cs), the resulting TexCoord0-3 reproduce the SAME per-corner UV mapping the raw
+    /// TR4 face+texture data actually specifies -- instead of the always-0 default, which left every
+    /// floor tile in its texture's "natural" orientation regardless of how the level really placed it
+    /// (visible as floor tiles that should be rotated/mirrored all facing the same way).
+    ///
+    /// Derivation (empirically verified against a real sector: alexhub2 room0 sector(1,1) -- see
+    /// DOCUMENTATION.md): TombLib's Floor decode assigns TexCoord0/1/2/3 to the FIXED world corners
+    /// XnZn/XnZp/XpZp/XpZn (in that order) from a "uv[]" array built from the plain axis-aligned
+    /// texture bounding box (uv[0]=top-left, uv[1]=top-right, uv[2]=bottom-right, uv[3]=bottom-left),
+    /// after first (if the flip flag is set) swapping uv[0]&lt;-&gt;uv[1] and uv[2]&lt;-&gt;uv[3], then
+    /// cyclically rotating the array by Reff=(Rotation+2)%4 steps. Solving for the box-index the raw
+    /// data assigns to world corner XnZn gives Rotation=(1-bXnZn) mod 4 in the non-mirrored case.
+    /// Returns (0,false) for any face whose raw UV winding isn't a clean rotation or mirror of its
+    /// own bounding box (shouldn't happen for a real, undistorted floor tile) rather than guessing.
+    /// </summary>
+    private static (byte rotation, bool flip) ComputeFloorQuadRotation(RoomVertex[] vertices, TextureVertex[] textureVertices)
+    {
+        int minX = vertices.Min(v => (int)v.X), maxX = vertices.Max(v => (int)v.X);
+        int minZ = vertices.Min(v => (int)v.Z), maxZ = vertices.Max(v => (int)v.Z);
+        if (minX == maxX || minZ == maxZ) return (0, false);
+
+        (int u, int v)? FindCornerUv(bool wantMaxX, bool wantMaxZ)
+        {
+            for (int i = 0; i < vertices.Length && i < textureVertices.Length; i++)
+            {
+                bool atX = vertices[i].X == (wantMaxX ? maxX : minX);
+                bool atZ = vertices[i].Z == (wantMaxZ ? maxZ : minZ);
+                if (atX && atZ) return (textureVertices[i].X >> 8, textureVertices[i].Y >> 8);
+            }
+            return null;
+        }
+
+        var uvXpZn = FindCornerUv(true, false);
+        var uvXnZn = FindCornerUv(false, false);
+        var uvXnZp = FindCornerUv(false, true);
+        var uvXpZp = FindCornerUv(true, true);
+        if (uvXpZn == null || uvXnZn == null || uvXnZp == null || uvXpZp == null) return (0, false);
+
+        int boxMinU = Math.Min(Math.Min(uvXpZn.Value.u, uvXnZn.Value.u), Math.Min(uvXnZp.Value.u, uvXpZp.Value.u));
+        int boxMaxU = Math.Max(Math.Max(uvXpZn.Value.u, uvXnZn.Value.u), Math.Max(uvXnZp.Value.u, uvXpZp.Value.u));
+        int boxMinV = Math.Min(Math.Min(uvXpZn.Value.v, uvXnZn.Value.v), Math.Min(uvXnZp.Value.v, uvXpZp.Value.v));
+        int boxMaxV = Math.Max(Math.Max(uvXpZn.Value.v, uvXnZn.Value.v), Math.Max(uvXnZp.Value.v, uvXpZp.Value.v));
+        if (boxMinU == boxMaxU || boxMinV == boxMaxV) return (0, false);
+
+        int BoxIndex((int u, int v) uv)
+        {
+            bool atMaxU = Math.Abs(uv.u - boxMaxU) < Math.Abs(uv.u - boxMinU);
+            bool atMaxV = Math.Abs(uv.v - boxMaxV) < Math.Abs(uv.v - boxMinV);
+            return (atMaxU, atMaxV) switch { (false, false) => 0, (true, false) => 1, (true, true) => 2, (false, true) => 3 };
+        }
+
+        int bXpZn = BoxIndex(uvXpZn.Value), bXnZn = BoxIndex(uvXnZn.Value),
+            bXnZp = BoxIndex(uvXnZp.Value), bXpZp = BoxIndex(uvXpZp.Value);
+
+        // World-corner cycle XpZn -> XnZn -> XnZp -> XpZp -> (XpZn): a pure rotation keeps this in
+        // step with the box's own cycle (each successive box-index +1 mod 4); a mirrored UV
+        // assignment instead decreases by 1 mod 4 at each step.
+        int stepA = (bXnZn - bXpZn + 4) % 4;
+        int stepB = (bXnZp - bXnZn + 4) % 4;
+        int stepC = (bXpZp - bXnZp + 4) % 4;
+
+        bool isRotationOnly = stepA == 1 && stepB == 1 && stepC == 1;
+        bool isMirrored = stepA == 3 && stepB == 3 && stepC == 3;
+        if (!isRotationOnly && !isMirrored) return (0, false);
+
+        int effectiveBXnZn = isMirrored ? new[] { 1, 0, 3, 2 }[bXnZn] : bXnZn;
+        int rotation = ((1 - effectiveBXnZn) % 4 + 4) % 4;
+        return ((byte)rotation, isMirrored);
     }
 
     private static void ApplyFloorData(Block block, ParsedFloorData fd, LevelRoom r1, bool fixFdivs)

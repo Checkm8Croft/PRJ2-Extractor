@@ -409,6 +409,57 @@ so it's invisible to every percentage number in this document. Kept anyway since
 geometry-accuracy fix, scoped to a small, well-understood case (confirmed: only 4 sectors in room 3 are
 actually outer-ring AND portal-touched, out of the 59 sectors a portal's bounding box loosely overlaps).
 
+### 2.20 -- Floor texture Rotation/mirror was always 0: derived and implemented the real formula
+
+**Symptom (reported by Francy):** floor tiles that should be rotated or mirrored in certain spots
+all face the same "natural" direction instead, visibly wrong for tileable/directional floor textures
+(e.g. a directional plank or relief pattern that should alternate orientation doesn't).
+
+**Root cause:** `SetBlockTexture` hard-coded `blockTex.Rotation = 0` unconditionally, and never set
+the mirror-flip bit (`Flags1 & 0x80`) either. `ToPrjTexInfo` also only ever computes a plain
+axis-aligned bounding box (`X/Y/Right/Bottom`) from the texture's 4 vertices, discarding their
+original per-corner UV *winding* entirely -- so by the time `Prj2Exporter.LoadTextureArea` runs,
+the rotation/mirror information the raw TR4 data actually encodes has already been thrown away
+upstream, on top of never being computed in the first place.
+
+**Derivation:** `Prj2Exporter.LoadTextureArea` is ported verbatim from TombLib's own
+`PrjLoader.LoadTextureArea` decode, so it's an authoritative, already-correct reference for what a
+given `Rotation`/flip *produces*. Worked the decode backwards on one concrete real sector (`alexhub2`
+room0, sector(1,1)): compared the raw `RoomFace` vertices (world corners) and their paired
+`ObjectTexture.Vertices` (UV, vertex-index-for-vertex-index) against the reference's already-correct
+`TexCoord0-3` for the same sector, loaded via TombLib. Confirmed self-consistently across all 4
+corners: for a Floor quad, TombLib's decode assigns `TexCoord0/1/2/3` to the FIXED world corners
+`XnZn/XnZp/XpZp/XpZn` (in that order), reading from a `uv[]` array built from the texture's own
+axis-aligned bounding box (`uv[0]`=top-left, `uv[1]`=top-right, `uv[2]`=bottom-right, `uv[3]`=bottom-
+left) -- after first swapping `uv[0]<->uv[1]` and `uv[2]<->uv[3]` if the mirror-flip bit is set, then
+cyclically rotating the array by `Reff=(Rotation+2)%4` steps. Solving for the box-index the raw data
+assigns to world corner `XnZn` gives `Rotation=(1-bXnZn) mod 4` in the non-mirrored case (a mirrored
+case is detected separately: the 4 corners' box-indices decrease by 1 around the cycle instead of
+increasing, matching a reversed winding).
+
+**Fix:** added `ComputeFloorQuadRotation` (`TrLevel.cs`) -- for a quad Floor face, finds each of the
+4 world corners' raw UV (by matching `RoomVertex` min/max X/Z against `face.Vertices[]`, paired
+position-for-position with `ObjectTexture.Vertices[]`), determines which of the 4 raw UVs maps to
+which box corner, and applies the derivation above. Returns `(0, false)` -- the old, safe default --
+for any face whose winding isn't a clean rotation or mirror of its own bounding box, rather than
+guessing. `SetBlockTexture` now takes optional `rotation`/`flip` parameters and actually sets
+`blockTex.Rotation`/`Flags1 & 0x80` instead of hard-coding them. Wired in only for quad (non-
+triangle) Floor faces (slot 0) in `ApplyRoomFaceTexture`'s floor/ceiling branch, computed once per
+face (rotation/mirror is a property of the whole face's UV mapping, not per covered sector) --
+Ceiling and triangulated Floor pieces are unaffected for now (still `(0, false)`, same as before);
+the same derivation would need to be redone separately for those, since `LoadTextureArea`'s decode
+differs for them (different baseline offset, different final TexCoord-index mapping, and for
+triangles an entirely different 3-step rotation cycle).
+
+**Result:** validated directly (not just via the wall-tier/coverage metrics, which only check texture
+KEY presence and wouldn't show this at all) by comparing our exported `TexCoord0-3` against the
+reference's for every Floor quad sector both sides have: **850/857 (99.2%) now match exactly**, up
+from an unmeasured but clearly much lower baseline (every one of these was previously wrong whenever
+the real rotation/mirror wasn't coincidentally 0). The remaining 7 mismatches (rooms 52, 112, 156,
+164) show a *completely different* texture region, not just a wrong rotation of the same one --
+indicating a separate, pre-existing "wrong quad selected" issue at those specific sectors, unrelated
+to this fix and not investigated further this session.
+
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
