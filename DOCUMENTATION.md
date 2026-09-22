@@ -460,6 +460,28 @@ the real rotation/mirror wasn't coincidentally 0). The remaining 7 mismatches (r
 indicating a separate, pre-existing "wrong quad selected" issue at those specific sectors, unrelated
 to this fix and not investigated further this session.
 
+**Ceiling attempted, ruled out (0% match) -- do not re-enable without re-deriving.** The same method
+was applied to Ceiling quad faces: read `LoadTextureArea`'s Ceiling branch (no "+2" baseline, final
+TexCoord indices [2,1,0,3] instead of Floor's [3,0,1,2]), derive the analogous fixed world-corner
+assignment from 3 real flat Ceiling sectors (rooms 8 and 10), and wire it in the same way. Validating
+the WIRED-IN result gave **0/343 (0%) exact match** -- including sectors the function itself computes
+Rotation=0/flip=false for (confirmed via a temporary debug log showing the actual computed values),
+meaning even the "no rotation needed" baseline doesn't reproduce the reference's Ceiling output. Since
+a wrong nonzero rotation is worse than the previous always-0 default (it would actively break cases
+that used to work by coincidence), the Ceiling wiring was reverted; `ComputeCeilingQuadRotation` is
+kept in the code, marked KNOWN INCORRECT, as a record of the attempt. The likely cause: TombLib's
+actual Ceiling mesh-vertex generation order (inside the precompiled `TombLib.dll`'s
+`Room.BuildGeometry`, not source-inspectable here) differs from Floor's in a way this derivation
+didn't capture -- simply mirroring Floor's index array wasn't sufficient. A future attempt should
+probably instrument `BuildGeometry`'s actual output (e.g. via reflection or a decompiler) rather than
+inferring it from the PrjLoader-side decode alone.
+
+**Triangles (Floor_Triangle2/Ceiling_Triangle2) not attempted this session** -- `LoadTextureArea`'s
+triangle branch is a materially different decode (`blockTex.Triangle` 0-3 picks which 3 of the 4 box
+corners are used, a separate 3-step rotation cycle via `%3`, and `SplitDirectionIsXEqualsZ`-dependent
+baselines that differ again between Floor/Ceiling/Ceiling_Triangle2) needing its own from-scratch
+derivation, not a simple extension of the quad formula above.
+
 ---
 
 ## Key structural lessons (apply to future work on this codebase)

@@ -1638,6 +1638,13 @@ public class TrLevel : IDisposable
             var (floorRotation, floorFlip) = !face.IsTriangle
                 ? ComputeFloorQuadRotation(vertices, objectTextures[textureIndex].Vertices)
                 : ((byte)0, false);
+            // NOTE: a Ceiling-equivalent formula was attempted (ComputeCeilingQuadRotation, still
+            // present below) but NOT wired in here -- it produced 0% exact TexCoord match against
+            // the reference in validation (vs Floor's 99.2%), including for its own Rotation=0
+            // baseline cases, meaning the derivation doesn't actually hold and would inject wrong
+            // nonzero rotations that are worse than the previous always-0 default. See
+            // DOCUMENTATION.md for what was tried and ruled out before shipping Floor-only.
+
             for (int bx = bx0; bx <= bx1; bx++)
             for (int bz = bz0; bz <= bz1; bz++)
             {
@@ -1938,28 +1945,17 @@ public class TrLevel : IDisposable
     }
 
     /// <summary>
-    /// Computes the classic-PRJ Rotation (0-3) and mirror-flip flag a Floor/Floor_Triangle2 QUAD
-    /// face needs so that, once decoded by TombLib's PrjLoader-verbatim LoadTextureArea (see
-    /// Prj2Exporter.cs), the resulting TexCoord0-3 reproduce the SAME per-corner UV mapping the raw
-    /// TR4 face+texture data actually specifies -- instead of the always-0 default, which left every
-    /// floor tile in its texture's "natural" orientation regardless of how the level really placed it
-    /// (visible as floor tiles that should be rotated/mirrored all facing the same way).
-    ///
-    /// Derivation (empirically verified against a real sector: alexhub2 room0 sector(1,1) -- see
-    /// DOCUMENTATION.md): TombLib's Floor decode assigns TexCoord0/1/2/3 to the FIXED world corners
-    /// XnZn/XnZp/XpZp/XpZn (in that order) from a "uv[]" array built from the plain axis-aligned
-    /// texture bounding box (uv[0]=top-left, uv[1]=top-right, uv[2]=bottom-right, uv[3]=bottom-left),
-    /// after first (if the flip flag is set) swapping uv[0]&lt;-&gt;uv[1] and uv[2]&lt;-&gt;uv[3], then
-    /// cyclically rotating the array by Reff=(Rotation+2)%4 steps. Solving for the box-index the raw
-    /// data assigns to world corner XnZn gives Rotation=(1-bXnZn) mod 4 in the non-mirrored case.
-    /// Returns (0,false) for any face whose raw UV winding isn't a clean rotation or mirror of its
-    /// own bounding box (shouldn't happen for a real, undistorted floor tile) rather than guessing.
+    /// Shared corner/box extraction for Floor and Ceiling quad rotation derivation: for a quad face,
+    /// finds each of the 4 world corners' raw UV, determines which box-corner (0=TL,1=TR,2=BR,3=BL
+    /// of the texture's own axis-aligned bounding box) each one lands on, and classifies the winding
+    /// as a pure rotation, a pure mirror, or neither (returns null for the latter -- e.g. a
+    /// degenerate or distorted face -- so callers can fall back to the safe (0,false) default).
     /// </summary>
-    private static (byte rotation, bool flip) ComputeFloorQuadRotation(RoomVertex[] vertices, TextureVertex[] textureVertices)
+    private static (int bXpZn, int bXnZn, int bXnZp, int bXpZp, bool isMirrored)? ComputeCornerBoxIndices(RoomVertex[] vertices, TextureVertex[] textureVertices)
     {
         int minX = vertices.Min(v => (int)v.X), maxX = vertices.Max(v => (int)v.X);
         int minZ = vertices.Min(v => (int)v.Z), maxZ = vertices.Max(v => (int)v.Z);
-        if (minX == maxX || minZ == maxZ) return (0, false);
+        if (minX == maxX || minZ == maxZ) return null;
 
         (int u, int v)? FindCornerUv(bool wantMaxX, bool wantMaxZ)
         {
@@ -1976,13 +1972,13 @@ public class TrLevel : IDisposable
         var uvXnZn = FindCornerUv(false, false);
         var uvXnZp = FindCornerUv(false, true);
         var uvXpZp = FindCornerUv(true, true);
-        if (uvXpZn == null || uvXnZn == null || uvXnZp == null || uvXpZp == null) return (0, false);
+        if (uvXpZn == null || uvXnZn == null || uvXnZp == null || uvXpZp == null) return null;
 
         int boxMinU = Math.Min(Math.Min(uvXpZn.Value.u, uvXnZn.Value.u), Math.Min(uvXnZp.Value.u, uvXpZp.Value.u));
         int boxMaxU = Math.Max(Math.Max(uvXpZn.Value.u, uvXnZn.Value.u), Math.Max(uvXnZp.Value.u, uvXpZp.Value.u));
         int boxMinV = Math.Min(Math.Min(uvXpZn.Value.v, uvXnZn.Value.v), Math.Min(uvXnZp.Value.v, uvXpZp.Value.v));
         int boxMaxV = Math.Max(Math.Max(uvXpZn.Value.v, uvXnZn.Value.v), Math.Max(uvXnZp.Value.v, uvXpZp.Value.v));
-        if (boxMinU == boxMaxU || boxMinV == boxMaxV) return (0, false);
+        if (boxMinU == boxMaxU || boxMinV == boxMaxV) return null;
 
         int BoxIndex((int u, int v) uv)
         {
@@ -2003,10 +1999,67 @@ public class TrLevel : IDisposable
 
         bool isRotationOnly = stepA == 1 && stepB == 1 && stepC == 1;
         bool isMirrored = stepA == 3 && stepB == 3 && stepC == 3;
-        if (!isRotationOnly && !isMirrored) return (0, false);
+        if (!isRotationOnly && !isMirrored) return null;
+
+        return (bXpZn, bXnZn, bXnZp, bXpZp, isMirrored);
+    }
+
+    /// <summary>
+    /// Computes the classic-PRJ Rotation (0-3) and mirror-flip flag a Floor/Floor_Triangle2 QUAD
+    /// face needs so that, once decoded by TombLib's PrjLoader-verbatim LoadTextureArea (see
+    /// Prj2Exporter.cs), the resulting TexCoord0-3 reproduce the SAME per-corner UV mapping the raw
+    /// TR4 face+texture data actually specifies -- instead of the always-0 default, which left every
+    /// floor tile in its texture's "natural" orientation regardless of how the level really placed it
+    /// (visible as floor tiles that should be rotated/mirrored all facing the same way).
+    ///
+    /// Derivation (empirically verified against a real sector: alexhub2 room0 sector(1,1) -- see
+    /// DOCUMENTATION.md): TombLib's Floor decode assigns TexCoord0/1/2/3 to the FIXED world corners
+    /// XnZn/XnZp/XpZp/XpZn (in that order) from a "uv[]" array built from the plain axis-aligned
+    /// texture bounding box (uv[0]=top-left, uv[1]=top-right, uv[2]=bottom-right, uv[3]=bottom-left),
+    /// after first (if the flip flag is set) swapping uv[0]&lt;-&gt;uv[1] and uv[2]&lt;-&gt;uv[3], then
+    /// cyclically rotating the array by Reff=(Rotation+2)%4 steps. Solving for the box-index the raw
+    /// data assigns to world corner XnZn gives Rotation=(1-bXnZn) mod 4 in the non-mirrored case.
+    /// Returns (0,false) for any face whose raw UV winding isn't a clean rotation or mirror of its
+    /// own bounding box (shouldn't happen for a real, undistorted floor tile) rather than guessing.
+    /// </summary>
+    private static (byte rotation, bool flip) ComputeFloorQuadRotation(RoomVertex[] vertices, TextureVertex[] textureVertices)
+    {
+        var r = ComputeCornerBoxIndices(vertices, textureVertices);
+        if (r == null) return (0, false);
+        var (_, bXnZn, _, _, isMirrored) = r.Value;
 
         int effectiveBXnZn = isMirrored ? new[] { 1, 0, 3, 2 }[bXnZn] : bXnZn;
         int rotation = ((1 - effectiveBXnZn) % 4 + 4) % 4;
+        return ((byte)rotation, isMirrored);
+    }
+
+    /// <summary>
+    /// Same derivation as <see cref="ComputeFloorQuadRotation"/>, but for Ceiling quad faces.
+    /// KNOWN INCORRECT -- kept unwired (see the call site's comment) as a record of what was tried.
+    /// TombLib's Ceiling decode differs from Floor's in two ways (verified against
+    /// Prj2Exporter.cs's LoadTextureArea): there is no "+2" baseline added to Rotation before the
+    /// %4 rotate (Reff = Rotation directly), and the final TexCoord0/1/2/3 read from the rotated
+    /// array at indices [2,1,0,3] instead of Floor's [3,0,1,2]. The analogous world-corner
+    /// assignment this function assumes (XnZp/XnZn/XpZn/XpZp) was derived the same way as Floor's
+    /// and self-consistently matched 3 real Rotation=0 sectors during derivation, but validating
+    /// the WIRED-IN result against the reference gave 0% exact match (850/857, i.e. 99.2%, for
+    /// Floor's equivalent check) -- including for sectors this function itself computes
+    /// Rotation=0/flip=false for, meaning even the "no-op" baseline doesn't reproduce reference
+    /// output. The likely cause: TombLib's actual Ceiling mesh-vertex generation order (inside the
+    /// precompiled TombLib.dll's Room.BuildGeometry, not source-inspectable here) differs from
+    /// Floor's in a way this derivation didn't capture -- simply swapping the final index array
+    /// wasn't sufficient. Needs a fresh, more careful empirical derivation (or decompiling
+    /// BuildGeometry) before it can be wired in; do not re-enable without re-validating the exact
+    /// TexCoord match rate first.
+    /// </summary>
+    private static (byte rotation, bool flip) ComputeCeilingQuadRotation(RoomVertex[] vertices, TextureVertex[] textureVertices)
+    {
+        var r = ComputeCornerBoxIndices(vertices, textureVertices);
+        if (r == null) return (0, false);
+        var (_, _, bXnZp, _, isMirrored) = r.Value;
+
+        int effectiveBXnZp = isMirrored ? new[] { 1, 0, 3, 2 }[bXnZp] : bXnZp;
+        int rotation = ((2 - effectiveBXnZp) % 4 + 4) % 4;
         return ((byte)rotation, isMirrored);
     }
 
