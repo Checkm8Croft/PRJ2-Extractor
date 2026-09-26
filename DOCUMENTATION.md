@@ -476,6 +476,21 @@ didn't capture -- simply mirroring Floor's index array wasn't sufficient. A futu
 probably instrument `BuildGeometry`'s actual output (e.g. via reflection or a decompiler) rather than
 inferring it from the PrjLoader-side decode alone.
 
+**Follow-up: is it just that this level has no rotated ceilings?** (Francy's hypothesis, worth
+checking before assuming the formula itself is unfixable.) Ran the same box-index extraction across
+every real flat quad Ceiling sector with a reference match (668 total, not just the 3 used for the
+original derivation) and brute-force tested all 16 (reference corner, constant k) combinations for
+how well `Rotation=(k-bCorner)%4` predicts the reference's actual required rotation. Two things came
+out of this: (1) the level does have real variety -- 550/668 (82.3%) genuinely need `Rotation=0`, but
+118/668 (17.7%) need something else, so it's not a case of "never rotated"; (2) no single
+(corner,k) formula gets anywhere close even to the 82.3% "always predict 0" baseline -- the best found
+was 47.2% (`corner=XpZn k=2`). That second point is the more important one: it means `bOur` (the raw
+TR4 UV-to-box-corner mapping this whole approach is built on) varies substantially even among sectors
+that all genuinely need `Rotation=0`, which is only possible if the raw per-quad UV winding depends on
+something beyond simple rotation/mirror of a rectangle -- consistent with, and sharpening, the
+`BuildGeometry`-vertex-order hypothesis above. Floor's equivalent bOur values were apparently uniform
+enough for the same approach to reach 99.2%; Ceiling's aren't, for a reason not yet identified.
+
 **Triangles (Floor_Triangle2/Ceiling_Triangle2) not attempted this session** -- `LoadTextureArea`'s
 triangle branch is a materially different decode (`blockTex.Triangle` 0-3 picks which 3 of the 4 box
 corners are used, a separate 3-step rotation cycle via `%3`, and `SplitDirectionIsXEqualsZ`-dependent
