@@ -1638,12 +1638,9 @@ public class TrLevel : IDisposable
             var (floorRotation, floorFlip) = !face.IsTriangle
                 ? ComputeFloorQuadRotation(vertices, objectTextures[textureIndex].Vertices)
                 : ((byte)0, false);
-            // NOTE: a Ceiling-equivalent formula was attempted (ComputeCeilingQuadRotation, still
-            // present below) but NOT wired in here -- it produced 0% exact TexCoord match against
-            // the reference in validation (vs Floor's 99.2%), including for its own Rotation=0
-            // baseline cases, meaning the derivation doesn't actually hold and would inject wrong
-            // nonzero rotations that are worse than the previous always-0 default. See
-            // DOCUMENTATION.md for what was tried and ruled out before shipping Floor-only.
+            var (ceilRotation, ceilFlip) = !face.IsTriangle
+                ? ComputeCeilingQuadRotation(vertices, objectTextures[textureIndex].Vertices)
+                : ((byte)0, false);
 
             for (int bx = bx0; bx <= bx1; bx++)
             for (int bz = bz0; bz <= bz1; bz++)
@@ -1680,6 +1677,8 @@ public class TrLevel : IDisposable
                 }
                 if (slot == 0 && !face.IsTriangle)
                     SetBlockTexture(targetBlock.Textures[slot], textureIndex, face, objectTextures[textureIndex], floorRotation, floorFlip);
+                else if (slot == 1 && !face.IsTriangle)
+                    SetBlockTexture(targetBlock.Textures[slot], textureIndex, face, objectTextures[textureIndex], ceilRotation, ceilFlip);
                 else
                     SetBlockTexture(targetBlock.Textures[slot], textureIndex, face, objectTextures[textureIndex]);
             }
@@ -2034,33 +2033,40 @@ public class TrLevel : IDisposable
     }
 
     /// <summary>
-    /// Same derivation as <see cref="ComputeFloorQuadRotation"/>, but for Ceiling quad faces.
-    /// KNOWN INCORRECT -- kept unwired (see the call site's comment) as a record of what was tried.
-    /// TombLib's Ceiling decode differs from Floor's in two ways (verified against
-    /// Prj2Exporter.cs's LoadTextureArea): there is no "+2" baseline added to Rotation before the
-    /// %4 rotate (Reff = Rotation directly), and the final TexCoord0/1/2/3 read from the rotated
-    /// array at indices [2,1,0,3] instead of Floor's [3,0,1,2]. The analogous world-corner
-    /// assignment this function assumes (XnZp/XnZn/XpZn/XpZp) was derived the same way as Floor's
-    /// and self-consistently matched 3 real Rotation=0 sectors during derivation, but validating
-    /// the WIRED-IN result against the reference gave 0% exact match (850/857, i.e. 99.2%, for
-    /// Floor's equivalent check) -- including for sectors this function itself computes
-    /// Rotation=0/flip=false for, meaning even the "no-op" baseline doesn't reproduce reference
-    /// output. The likely cause: TombLib's actual Ceiling mesh-vertex generation order (inside the
-    /// precompiled TombLib.dll's Room.BuildGeometry, not source-inspectable here) differs from
-    /// Floor's in a way this derivation didn't capture -- simply swapping the final index array
-    /// wasn't sufficient. Needs a fresh, more careful empirical derivation (or decompiling
-    /// BuildGeometry) before it can be wired in; do not re-enable without re-validating the exact
-    /// TexCoord match rate first.
+    /// Computes Rotation/flip for a Ceiling quad face. Unlike Floor, this was NOT successfully
+    /// derived analytically from TombLib source (see the long investigation in DOCUMENTATION.md,
+    /// 2.20) -- the naive derivation (mirroring Floor's approach onto Ceiling's differently-shaped
+    /// LoadTextureArea decode branch) got 0% exact match. What DID work: confirmed from TombLib's
+    /// real source (RoomGeometry.cs AddQuad/BuildFloorOrCeilingFace, Sector.GetFaceTexture) that
+    /// Ceiling's STORED TexCoord0-3 use the EXACT SAME fixed world-corner convention as Floor's
+    /// (TexCoord0=XnZn, TexCoord1=XnZp, TexCoord2=XpZp, TexCoord3=XpZn) -- the Ceiling-specific
+    /// TexCoord0&lt;-&gt;TexCoord2 swap in RoomGeometry.Build only touches the render-mesh triangle list,
+    /// not the sector-stored value we compare against. Then, since our raw TR4 quad's UV winding
+    /// splits into two distinct geometric groups depending on whether ComputeCornerBoxIndices sees a
+    /// pure-rotation winding (steps of +1) or a reversed one (steps of -1, labelled "mirrored" here --
+    /// empirically this reversal correlates with the compiled quad's own backface-culling winding
+    /// direction for a downward-facing polygon, NOT an artist's mirror choice), a brute-force search
+    /// across 668 real flat Ceiling quad sectors (with a reference match) found the best-fitting
+    /// formula separately for each group -- NEVER setting the flip bit in either case (flip=false
+    /// always outperformed flip=true for both groups in the same search):
+    ///   - non-reversed winding: Rotation = (0 - bXpZn) % 4
+    ///   - reversed winding:     Rotation = (3 - bXpZn) % 4
+    /// Combined full-decode validation (all 4 TexCoord slots, not just one) against those 668
+    /// samples: 560/668 (83.8%) exact match -- a large improvement over the 0% naive attempt, though
+    /// short of Floor's 99.2%. The remaining ~16% gap is not understood (possibly a further subgroup
+    /// within one of the two winding patterns, or a rarer third case); treat this as "good enough to
+    /// ship, not fully solved" and see DOCUMENTATION.md 2.20 before trying to improve it further.
     /// </summary>
     private static (byte rotation, bool flip) ComputeCeilingQuadRotation(RoomVertex[] vertices, TextureVertex[] textureVertices)
     {
         var r = ComputeCornerBoxIndices(vertices, textureVertices);
         if (r == null) return (0, false);
-        var (_, _, bXnZp, _, isMirrored) = r.Value;
+        var (bXpZn, _, _, _, isMirrored) = r.Value;
 
-        int effectiveBXnZp = isMirrored ? new[] { 1, 0, 3, 2 }[bXnZp] : bXnZp;
-        int rotation = ((2 - effectiveBXnZp) % 4 + 4) % 4;
-        return ((byte)rotation, isMirrored);
+        int rotation = isMirrored
+            ? ((3 - bXpZn) % 4 + 4) % 4
+            : ((0 - bXpZn) % 4 + 4) % 4;
+        return ((byte)rotation, false);
     }
 
     private static void ApplyFloorData(Block block, ParsedFloorData fd, LevelRoom r1, bool fixFdivs)

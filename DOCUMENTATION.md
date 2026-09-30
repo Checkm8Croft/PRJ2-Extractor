@@ -460,37 +460,51 @@ the real rotation/mirror wasn't coincidentally 0). The remaining 7 mismatches (r
 indicating a separate, pre-existing "wrong quad selected" issue at those specific sectors, unrelated
 to this fix and not investigated further this session.
 
-**Ceiling attempted, ruled out (0% match) -- do not re-enable without re-deriving.** The same method
-was applied to Ceiling quad faces: read `LoadTextureArea`'s Ceiling branch (no "+2" baseline, final
-TexCoord indices [2,1,0,3] instead of Floor's [3,0,1,2]), derive the analogous fixed world-corner
-assignment from 3 real flat Ceiling sectors (rooms 8 and 10), and wire it in the same way. Validating
-the WIRED-IN result gave **0/343 (0%) exact match** -- including sectors the function itself computes
-Rotation=0/flip=false for (confirmed via a temporary debug log showing the actual computed values),
-meaning even the "no rotation needed" baseline doesn't reproduce the reference's Ceiling output. Since
-a wrong nonzero rotation is worse than the previous always-0 default (it would actively break cases
-that used to work by coincidence), the Ceiling wiring was reverted; `ComputeCeilingQuadRotation` is
-kept in the code, marked KNOWN INCORRECT, as a record of the attempt. The likely cause: TombLib's
-actual Ceiling mesh-vertex generation order (inside the precompiled `TombLib.dll`'s
-`Room.BuildGeometry`, not source-inspectable here) differs from Floor's in a way this derivation
-didn't capture -- simply mirroring Floor's index array wasn't sufficient. A future attempt should
-probably instrument `BuildGeometry`'s actual output (e.g. via reflection or a decompiler) rather than
-inferring it from the PrjLoader-side decode alone.
+**Ceiling: first attempt failed (0%), then solved to 89.2% (306/343) -- and how, since the dead ends
+are instructive.**
 
-**Follow-up: is it just that this level has no rotated ceilings?** (Francy's hypothesis, worth
-checking before assuming the formula itself is unfixable.) Ran the same box-index extraction across
-every real flat quad Ceiling sector with a reference match (668 total, not just the 3 used for the
-original derivation) and brute-force tested all 16 (reference corner, constant k) combinations for
-how well `Rotation=(k-bCorner)%4` predicts the reference's actual required rotation. Two things came
-out of this: (1) the level does have real variety -- 550/668 (82.3%) genuinely need `Rotation=0`, but
-118/668 (17.7%) need something else, so it's not a case of "never rotated"; (2) no single
-(corner,k) formula gets anywhere close even to the 82.3% "always predict 0" baseline -- the best found
-was 47.2% (`corner=XpZn k=2`). That second point is the more important one: it means `bOur` (the raw
-TR4 UV-to-box-corner mapping this whole approach is built on) varies substantially even among sectors
-that all genuinely need `Rotation=0`, which is only possible if the raw per-quad UV winding depends on
-something beyond simple rotation/mirror of a rectangle -- consistent with, and sharpening, the
-`BuildGeometry`-vertex-order hypothesis above. Floor's equivalent bOur values were apparently uniform
-enough for the same approach to reach 99.2%; Ceiling's aren't, for a reason not yet identified.
+*Attempt 1 (0%, reverted):* applied the same method as Floor -- read `LoadTextureArea`'s Ceiling
+branch (no "+2" baseline, final TexCoord indices [2,1,0,3] instead of Floor's [3,0,1,2]), derived a
+world-corner assignment from 3 real flat Ceiling sectors (rooms 8 and 10), wired it in. Validation
+gave 0/343 exact matches, even for sectors the function itself assigned Rotation=0. The 3 derivation
+samples had all happened to be `Rotation=0` identity cases, so the derivation was never actually
+tested against a non-trivial rotation.
 
+*Attempt 2 (47.2% best, methodologically flawed):* a brute-force search over all 668 real flat quad
+Ceiling sectors -- but it scored candidates by comparing against a per-sample `requiredReff` derived
+from the reference's own box-index at slot 0 alone, which is not the right objective (it doesn't
+simulate the full 4-slot decode). Its 47.2% ceiling was an artifact of that scoring, not evidence
+the approach was unfixable, and led to the wrong conclusion that the cause was inside
+`Room.BuildGeometry` in the precompiled DLL.
+
+*What actually unblocked it:* Francy pointed out the full TombLib source is available locally
+(`C:\Users\Checkm8ra1n\Desktop\Projects\C#\Tomb-Editor\TombLib`). Reading it directly settled the
+theory: `RoomGeometry.BuildFloorOrCeilingFace`/`AddQuad` use the SAME fixed world-corner-to-vertex
+order for Floor and Ceiling, and `Sector.GetFaceTexture`/`SetFaceTexture` are plain pass-throughs
+(no hidden swap) -- so Ceiling's STORED `TexCoord0-3` use the exact same convention as Floor's
+(`TexCoord0=XnZn, 1=XnZp, 2=XpZp, 3=XpZn`). The `TexCoord0<->TexCoord2` "ceiling swap" in
+`RoomGeometry.Build` only touches the render-mesh triangle list (a backface-culling concern), not
+the stored value. That ruled out the BuildGeometry hypothesis and pointed back at the scoring.
+
+*Attempt 3 (what shipped):* redid the brute-force search with a CORRECT objective -- for each real
+sample and each candidate `(reference corner, constant k, flip)`, compute a predicted Rotation,
+simulate the FULL Ceiling decode (all 4 TexCoord slots, using `LoadTextureArea`'s actual rotate loop
+and Ceiling index array [2,1,0,3]), and require all 4 slots to match the reference's box-index
+pattern. Result, split by whether `ComputeCornerBoxIndices` sees a pure-rotation winding (box-index
+steps of +1 around the corner cycle) or a reversed one (steps of -1):
+  - non-reversed winding: `Rotation = (0 - bXpZn) % 4`, flip=false -- 248/338 (73.4%) on its own
+  - reversed winding:     `Rotation = (3 - bXpZn) % 4`, flip=false -- 312/330 (94.5%) on its own
+  - never setting the flip bit outperformed setting it, for both groups
+Notably the "reversed"/"mirrored" label is a misnomer for Ceiling: it correlates with the compiled
+quad's own winding direction for a downward-facing polygon (a structural fact about how the TR4
+compiler emits down-facing faces), not with an artist choosing to mirror the texture -- which is why
+Floor's "swap-based mirror" handling (and the flip bit) doesn't carry over.
+
+**Result (real export, full validation):** `Ceiling` quad faces: **306/343 (89.2%) exact
+`TexCoord0-3` match** against the reference, up from 0%. `Floor` unchanged at 850/857 (99.2%),
+wall-tier unchanged at 94.75% -- no regressions. The residual ~11% (37 sectors) is not understood
+(possibly a third winding subgroup, or the kind of "wrong quad selected" issue also seen in Floor's
+7 mismatches); `ComputeCeilingQuadRotation`'s doc comment records this. Kept flat-quad-only, like Floor.
 **Triangles (Floor_Triangle2/Ceiling_Triangle2) not attempted this session** -- `LoadTextureArea`'s
 triangle branch is a materially different decode (`blockTex.Triangle` 0-3 picks which 3 of the 4 box
 corners are used, a separate 3-step rotation cycle via `%3`, and `SplitDirectionIsXEqualsZ`-dependent
