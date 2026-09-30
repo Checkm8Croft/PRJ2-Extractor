@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest something new for PRJ2-Extractor or just an improvement to an existing feature
+title: "[Feature] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before wrting, read the coding guidelines:
+        https://github.com/Checkm8Croft/PRJ2-Extractor/blob/master/CODE_OF_CONDUCT.md
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like to see?
+      description: Describe your suggestion clearly.
+      placeholder: I'd like to see the support for TEN levels.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_behavior
+    attributes:
+      label: Extra context
+      description: Add any other kind of content such as screenshots.
+    validations:
+      required: false

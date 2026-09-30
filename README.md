@@ -11,6 +11,7 @@ PRJ2 Extractor is a tool for extracting from Tomb Raider levels, prj2 files that
     - [x] TR4
     - [ ] TRNG Levels
     - [x] TR5
+    - [ ] TEN
 - [x] Add PRJ2 extraction.
 - [x] Write Geometry of rooms
 - [x] Add level elements (sound sources, light points, sinks, etc.)

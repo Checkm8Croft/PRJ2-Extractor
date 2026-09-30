@@ -1,0 +1,48 @@
+name: Bug report
+description: Report an issue with PRJ2-Extractor
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before wrting, read the coding guidelines:
+        https://github.com/Checkm8Croft/PRJ2-Extractor/blob/master/CODE_OF_CONDUCT.md
+
+  - type: dropdown
+    id: prj2_type
+    attributes:
+      label: PRJ2 Element
+      description: Where do you encounted this issue?
+      options:
+        - Geometry
+        - Textures
+        - Levels Elements
+        - Objects
+        - Triggers
+    validations:
+      required: true
+
+  - type: dropdown
+    id: game
+    attributes:
+      label: Game
+      options:
+        - All games
+        - TR1
+        - TR2
+        - TR3
+        - TR4
+        - TR5
+        - TRNG
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Describe the issue clearly, so we can reproduce it goodly
+      placeholder: |
+        I've selected a TR2 level and the textures doesn't use the correct path.
+        The textures are located in (dir1) but Tomb Editor indicates (dir2)
+    validations:
+      required: true
