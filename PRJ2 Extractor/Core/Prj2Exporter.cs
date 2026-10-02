@@ -554,45 +554,69 @@ public static class Prj2Exporter
             LoadTextureArea(room, x, z, SectorFace.Floor_Triangle2, levelTexture, textures, block.Textures[8]);
             LoadTextureArea(room, x, z, SectorFace.Ceiling_Triangle2, levelTexture, textures, block.Textures[9]);
 
-            // Slot 2 (North/-X QA): own -X side if it has real geometry there, else the
-            // neighbour's +X side (PrjLoader: "case 10/2" collapsed -- Floor2 branch never taken).
-            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeX_QA))
-                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeX_QA, levelTexture, textures, block.Textures[2]);
-            else if (x > 0)
-                LoadTextureArea(room, x - 1, z, SectorFace.Wall_PositiveX_QA, levelTexture, textures, block.Textures[2]);
-
-            // Slot 3 (North/-X WS).
-            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeX_WS))
-                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeX_WS, levelTexture, textures, block.Textures[3]);
-            else if (x > 0)
-                LoadTextureArea(room, x - 1, z, SectorFace.Wall_PositiveX_WS, levelTexture, textures, block.Textures[3]);
-
-            // Slot 4 (North/-X Middle).
-            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeX_Middle))
-                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeX_Middle, levelTexture, textures, block.Textures[4]);
-            else if (x > 0)
-                LoadTextureArea(room, x - 1, z, SectorFace.Wall_PositiveX_Middle, levelTexture, textures, block.Textures[4]);
-
-            // Slot 5 (West/-Z QA).
-            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeZ_QA))
-                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeZ_QA, levelTexture, textures, block.Textures[5]);
-            else if (z > 0)
-                LoadTextureArea(room, x, z - 1, SectorFace.Wall_PositiveZ_QA, levelTexture, textures, block.Textures[5]);
-
-            // Slot 6 (West/-Z WS).
-            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeZ_WS))
-                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeZ_WS, levelTexture, textures, block.Textures[6]);
-            else if (z > 0)
-                LoadTextureArea(room, x, z - 1, SectorFace.Wall_PositiveZ_WS, levelTexture, textures, block.Textures[6]);
-
-            // Slot 7 (West/-Z Middle).
-            if (room.IsFaceDefined(x, z, SectorFace.Wall_NegativeZ_Middle))
-                LoadTextureArea(room, x, z, SectorFace.Wall_NegativeZ_Middle, levelTexture, textures, block.Textures[7]);
-            else if (z > 0)
-                LoadTextureArea(room, x, z - 1, SectorFace.Wall_PositiveZ_Middle, levelTexture, textures, block.Textures[7]);
+            // Slots 2-4 (-X QA/WS/Middle) and 5-7 (-Z QA/WS/Middle). See PlaceWallSeam.
+            PlaceWallSeam(room, x, z, true, levelTexture, textures, block.Textures[2], block.Textures[3], block.Textures[4]);
+            PlaceWallSeam(room, x, z, false, levelTexture, textures, block.Textures[5], block.Textures[6], block.Textures[7]);
         }
     }
 
+    /// <summary>
+    /// Places the QA/WS/Middle textures of one seam (own sector's -X or -Z side) on the faces that OUR
+    /// exported geometry actually defines. Tier labels are inferred from the compiled TR4 mesh and can
+    /// disagree with the tier our flattened Wall/BorderWall sector heights make TombLib define (e.g. a
+    /// full-height wall is a single Middle face here, but WS in a hand-authored reference). A texture whose
+    /// own tier face is not defined is moved to the nearest defined tier that has no texture of its own,
+    /// instead of being dropped (DOCUMENTATION.md 2.22). Tier order bottom to top: QA, Middle, WS.
+    /// Same-tier placement keeps PrjLoader's rule: own sector's Negative face if defined, else the
+    /// neighbour's Positive face.
+    /// </summary>
+    private static void PlaceWallSeam(Room room, int x, int z, bool isX, LevelTexture levelTexture, TexInfo[] textures,
+        BlockTex qaTex, BlockTex wsTex, BlockTex midTex)
+    {
+        int nx = isX ? x - 1 : x, nz = isX ? z : z - 1;
+        bool hasNeighbor = nx >= 0 && nz >= 0;
+        var neg = isX
+            ? new[] { SectorFace.Wall_NegativeX_QA, SectorFace.Wall_NegativeX_Middle, SectorFace.Wall_NegativeX_WS }
+            : new[] { SectorFace.Wall_NegativeZ_QA, SectorFace.Wall_NegativeZ_Middle, SectorFace.Wall_NegativeZ_WS };
+        var pos = isX
+            ? new[] { SectorFace.Wall_PositiveX_QA, SectorFace.Wall_PositiveX_Middle, SectorFace.Wall_PositiveX_WS }
+            : new[] { SectorFace.Wall_PositiveZ_QA, SectorFace.Wall_PositiveZ_Middle, SectorFace.Wall_PositiveZ_WS };
+        var tex = new[] { qaTex, midTex, wsTex };
+
+        var ownDefined = new bool[3];
+        var defined = new bool[3];
+        for (int t = 0; t < 3; t++)
+        {
+            ownDefined[t] = room.IsFaceDefined(x, z, neg[t]);
+            defined[t] = ownDefined[t] || (hasNeighbor && room.IsFaceDefined(nx, nz, pos[t]));
+        }
+
+        void Put(int faceTier, BlockTex source)
+        {
+            if (ownDefined[faceTier]) LoadTextureArea(room, x, z, neg[faceTier], levelTexture, textures, source);
+            else if (hasNeighbor) LoadTextureArea(room, nx, nz, pos[faceTier], levelTexture, textures, source);
+        }
+
+        var taken = new bool[3];
+        for (int t = 0; t < 3; t++)
+        {
+            if (tex[t].Tipo != 0x0007 || !defined[t]) continue;
+            Put(t, tex[t]);
+            taken[t] = true;
+        }
+        for (int t = 0; t < 3; t++)
+        {
+            if (tex[t].Tipo != 0x0007 || defined[t]) continue;
+            int best = -1;
+            for (int u = 0; u < 3; u++)
+            {
+                if (!defined[u] || taken[u] || tex[u].Tipo == 0x0007) continue;
+                if (best < 0 || Math.Abs(u - t) < Math.Abs(best - t)) best = u;
+            }
+            if (best >= 0) { Put(best, tex[t]); taken[best] = true; }
+            else Put(t, tex[t]); // nothing to move it to: previous behaviour
+        }
+    }
     /// <summary>
     /// Builds a TextureArea from one classic-PRJ BlockTex slot and writes it via
     /// Sector.SetFaceTexture. UV construction, rotation handling, triangle-corner selection and

@@ -545,6 +545,39 @@ the ownership question, still open).
 
 **Not done:** the `0/below` (11 vs 4) bucket is included in the rule; the `below/0` bucket (3 vs 11) is not. No attempt
 for seams with 2 quads. Rule not yet checked on a second level.
+### 2.22 -- Border/solid lone-quad seams, and the metric-vs-deliverable trap (the tier metric is NOT the deliverable)
+
+**Census of the 333 WS false negatives (PrjProbe, throwaway):** ~270 are on seams where one side is a room-border
+or solid sector (reference types BorderWall/Floor, Wall/Floor). The reference's hidden wall-sector heights
+(WF = wall floor, WC = wall ceiling; stored in the PRJ2 even though TR4 has no such data) partition the REAL
+sector's floor-to-ceiling span: QA below WF, Middle between WF and WC, WS above WC. The compiled quad's extent
+against the real side's floor/ceiling reveals which tiers exist. On 361 one-sided lone-quad seams: quad spans
+floor+ceiling -> reference WS 175 / QA 41 / none 33 / QA+WS+Mid 3 (a Middle-only face never occurs in the
+reference); touches floor only -> QA 46 / none 37 / WS 1; touches ceiling only -> none 13 / WS 9 / QA 2.
+
+**Fix 1 (`TrLevel.ApplyWallFace`):** new `borderSide` (1 = own is border/solid, 2 = neighbor is). `IsBorderOrSolid`
+was only ever checked on the NEIGHBOR, so own-side border seams went through the per-corner test with flattened
+heights. For a lone quad with exactly one unreliable side: touches ceiling (incl. spans both) -> WS, touches floor
+only -> QA, else Middle.
+
+**The trap:** after Fix 1 (and 2.21) the label metric rose (94.75% -> 96.01%) while the number of wall faces
+actually textured in the EXPORTED prj2 (PrjDiag section 5, sum of `Wall_*` rows) FELL: 1866 -> 1823 (2.21) ->
+1671 (Fix 1). Cause: `Prj2Exporter` only writes a slot's texture when TombLib defines that tier face on OUR
+geometry, and our Wall/BorderWall sectors are exported with flat Floor=YBottom/Ceiling=YTop, so a full-height
+wall is a single Middle face for us (the reference reaches the same visible wall through WS). A texture labelled WS
+on a seam where only Middle is defined was silently dropped. Tier labels only matter where the exported geometry
+defines that tier.
+
+**Fix 2 (`Prj2Exporter.PlaceWallSeam`):** per seam, a texture whose own tier face is not defined is moved to the
+nearest defined tier (order QA, Middle, WS) that has no texture of its own; same-tier placement is unchanged
+(own Negative face if defined, else neighbor Positive).
+
+**Result:** textured wall faces in the exported prj2 **1866 -> 2162** (reference defines 3487), label metric 96.01%
+(FP 835, FN 338). Floor/Ceiling rows unchanged.
+
+**Rule for future work:** judge wall changes by BOTH numbers. The label metric (PrjDiag section 1) measures
+agreement with the reference's tier labels; the textured-face count (section 5) measures what Tomb Editor will show.
+The ~1300 reference wall faces we still lack mostly come from hidden wall-sector heights we do not synthesize.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
