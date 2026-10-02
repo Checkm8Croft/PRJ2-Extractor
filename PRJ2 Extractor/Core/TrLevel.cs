@@ -1716,7 +1716,7 @@ public class TrLevel : IDisposable
                 bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, neighborX, bz) ||
                     seamQuadCounts.GetValueOrDefault((ownX, bz, true)) >= 3;
                 ApplyWallFace(prjRoom, ownX, bz, neighborX, bz, avgY, textureIndex, face, objectTextures,
-                    qaSlot: 2, middleSlot: 4, wsSlot: 3, minY, maxY, seamQuadCounts.GetValueOrDefault((ownX, bz, true)) == 1, neighborUnreliable, pending);
+                    qaSlot: 2, middleSlot: 4, wsSlot: 3, minY, maxY, seamQuadCounts.GetValueOrDefault((ownX, bz, true)) == 1, BorderSide(isInteriorSeam, levelRoom, ownX, bz, neighborX, bz), neighborUnreliable, pending);
             }
             return;
         }
@@ -1733,7 +1733,7 @@ public class TrLevel : IDisposable
                 bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, bx, neighborZ) ||
                     seamQuadCounts.GetValueOrDefault((bx, ownZ, false)) >= 3;
                 ApplyWallFace(prjRoom, bx, ownZ, bx, neighborZ, avgY, textureIndex, face, objectTextures,
-                    qaSlot: 5, middleSlot: 7, wsSlot: 6, minY, maxY, seamQuadCounts.GetValueOrDefault((bx, ownZ, false)) == 1, neighborUnreliable, pending);
+                    qaSlot: 5, middleSlot: 7, wsSlot: 6, minY, maxY, seamQuadCounts.GetValueOrDefault((bx, ownZ, false)) == 1, BorderSide(isInteriorSeam, levelRoom, bx, ownZ, bx, neighborZ), neighborUnreliable, pending);
             }
         }
     }
@@ -1820,7 +1820,7 @@ public class TrLevel : IDisposable
     /// </summary>
     private static void ApplyWallFace(PrjRoom prjRoom, int ownX, int ownZ, int neighborX, int neighborZ, int avgY,
         int textureIndex, RoomFace face, ObjectTexture[] objectTextures, int qaSlot, int middleSlot, int wsSlot,
-        int quadMinY, int quadMaxY, bool loneQuad, bool neighborUnreliable,
+        int quadMinY, int quadMaxY, bool loneQuad, int borderSide, bool neighborUnreliable,
         Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face, int minY, int maxY)>> pending)
     {
         int ownTarget = ownX * prjRoom.ZSize + ownZ;
@@ -1830,6 +1830,31 @@ public class TrLevel : IDisposable
         bool hasNeighbor = neighborX >= 0 && neighborZ >= 0 && neighborX < prjRoom.XSize && neighborZ < prjRoom.ZSize;
 
 
+        if (hasNeighbor && loneQuad && borderSide != 0)
+        {
+            // Exactly one side of the seam is a room-border / solid sector (its stored heights are
+            // flattened and carry no information) and the other side is a real sector. In the reference
+            // the hidden wall sector's heights partition the real sector's floor-to-ceiling span into
+            // QA (below wall floor) / Middle / WS (above wall ceiling), and the single compiled quad's
+            // extent against the real side's floor and ceiling shows which tiers exist (DOCUMENTATION.md 2.22).
+            int neighborTargetB = neighborX * prjRoom.ZSize + neighborZ;
+            if (neighborTargetB >= 0 && neighborTargetB < prjRoom.Blocks.Length)
+            {
+                bool relIsOwn = borderSide == 2;
+                var relBlock = relIsOwn ? prjRoom.Blocks[ownTarget] : prjRoom.Blocks[neighborTargetB];
+                bool isXDir = qaSlot == 2;
+                // Shared-seam corners of the reliable sector: own's -X/-Z side, or neighbor's +X/+Z side.
+                bool xp0 = isXDir ? !relIsOwn : false, zp0 = isXDir ? false : !relIsOwn;
+                bool xp1 = isXDir ? !relIsOwn : true, zp1 = isXDir ? true : !relIsOwn;
+                int f0 = GetCornerFloorY(relBlock, xp0, zp0), f1 = GetCornerFloorY(relBlock, xp1, zp1);
+                int c0 = GetCornerCeilY(relBlock, xp0, zp0), c1 = GetCornerCeilY(relBlock, xp1, zp1);
+                bool touchesFloor = quadMaxY >= Math.Min(f0, f1) - 8 && quadMaxY <= Math.Max(f0, f1) + 8;
+                bool touchesCeil = quadMinY >= Math.Min(c0, c1) - 8 && quadMinY <= Math.Max(c0, c1) + 8;
+                int borderSlot = touchesCeil ? wsSlot : touchesFloor ? qaSlot : middleSlot;
+                SetBlockTexture(prjRoom.Blocks[ownTarget].Textures[borderSlot], textureIndex, face, objectTextures[textureIndex]);
+                return;
+            }
+        }
         if (hasNeighbor && neighborUnreliable)
         {
             // Defer to FlushUnreliableWallSeams: collect this quad alongside every other real
@@ -1940,6 +1965,16 @@ public class TrLevel : IDisposable
         SetBlockTexture(prjRoom.Blocks[ownTarget].Textures[slot], textureIndex, face, objectTextures[textureIndex]);
     }
 
+    /// <summary>
+    /// 0 = neither or both sides of the seam are border/solid sectors, 1 = only OWN is, 2 = only the
+    /// NEIGHBOR is. Non-interior seams (room edge) always return 0.
+    /// </summary>
+    private static int BorderSide(bool isInteriorSeam, LevelRoom room, int ownX, int ownZ, int neighborX, int neighborZ)
+    {
+        if (!isInteriorSeam) return 0;
+        bool own = IsBorderOrSolid(room, ownX, ownZ), neigh = IsBorderOrSolid(room, neighborX, neighborZ);
+        return own == neigh ? 0 : own ? 1 : 2;
+    }
     /// <summary>
     /// True when a compiled wall quad does not cover its seam's floor-step band but lies next to it on
     /// the smaller-Y side with its far end short of the band's far end. Measured on alexhub2 (single-quad
