@@ -511,6 +511,40 @@ corners are used, a separate 3-step rotation cycle via `%3`, and `SplitDirection
 baselines that differ again between Floor/Ceiling/Ceiling_Triangle2) needing its own from-scratch
 derivation, not a simple extension of the quad formula above.
 
+### 2.21 -- Lone-quad WS seams: the quad's real Y range IS a signal (partially overturns 2.14)
+
+**What 2.14 missed:** it tested quad *count* only. Measured with a throwaway probe (`PrjProbe`, not part of
+the solution): on 466 interior seams covered by exactly one compiled quad, with a floor step (QA) and no ceiling
+step by our per-corner test, 77 have WS in the reference -- and **none of those 77 has a QA face at all** (the
+reference holds only WS there). Cross-tab of the quad's Y range against the floor-step band `[loF,hiF]` (built
+as in `ApplyWallFace`, tolerance 8 units):
+
+| quad minY vs loF | quad maxY vs hiF | reference WS | no WS |
+|---|---|---|---|
+| 0 (matches) | 0 (matches) | 2 | 348 |
+| below | below | 60 | 20 |
+| 0 | below | 11 | 4 |
+| below | 0 | 3 | 11 |
+| 0 | above | 0 | 6 |
+| below | above | 1 | 0 |
+
+A quad that coincides with the step band is QA (2 WS out of 350). A quad on the smaller-Y side with its far end
+short of the band's far end is the reference's WS (71 of 95). Note this population (77/389) differs from 2.14's
+(114/466); the probe's seam selection does not replicate 2.14's exactly, so the direction of the signal is solid but
+the exact percentages are indicative.
+
+**Fix:** `QuadAboveFloorStep(minY, maxY, loStep, hiStep)` = `maxY < hiStep - 8 && minY <= loStep + 8`. When a seam has
+exactly one compiled quad, a real floor step and no ceiling step, such a quad goes to `wsSlot` instead of `qaSlot`/Middle.
+Applied in both paths: `ApplyWallFace` (reliable neighbor) and the lone-quad branch of `FlushUnreliableWallSeams`.
+`minY`/`maxY` are now carried through the `pending` tuples.
+
+**Result (PrjDiag):** wall-tier **94.75% -> 95.18%** (FP 1020 -> 957, FN 523 -> 460). WS FN 191/213 -> 158/175;
+QA FP 205/220 -> 184/196; QA FN +7/+1 (small cost). Per-face coverage table unchanged: those numbers are
+direction/ownership-sensitive, and the extra WS seams land on the opposite ownership side from the reference (see
+the ownership question, still open).
+
+**Not done:** the `0/below` (11 vs 4) bucket is included in the rule; the `below/0` bucket (3 vs 11) is not. No attempt
+for seams with 2 quads. Rule not yet checked on a second level.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)

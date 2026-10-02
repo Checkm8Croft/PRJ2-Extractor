@@ -1425,7 +1425,7 @@ public class TrLevel : IDisposable
         // heights were perfectly legitimate (verified: alexhub2 room1 seam x=2/x=1,z=4 -- own and
         // neighbor both had real, distinct corner heights, but the reference's own 5-tier assignment
         // there [QA/Floor2/Middle/Ceiling2/WS] simply can't be derived from a 2-corner comparison).
-        var pending = new Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>>();
+        var pending = new Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face, int minY, int maxY)>>();
         var seamQuadCounts = CountWallQuadsPerSeam(levelRoom, prjRoom);
 
         foreach (var face in levelRoom.Rectangles)
@@ -1506,7 +1506,7 @@ public class TrLevel : IDisposable
     /// physically closest to the floor (-> QA) and the SMALLEST is closest to the ceiling (-> WS).
     /// </summary>
     private static void FlushUnreliableWallSeams(PrjRoom prjRoom, ObjectTexture[] objectTextures,
-        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>> pending)
+        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face, int minY, int maxY)>> pending)
     {
         foreach (var ((ownX, ownZ, isXDirection), quads) in pending)
         {
@@ -1561,11 +1561,20 @@ public class TrLevel : IDisposable
                     // genuine standalone Middle band, not a partial QA or WS step); both false means
                     // no usable difference either. Either way, Middle is the correct call -- only a
                     // clean single-sided difference picks QA or WS.
-                    if (hasQa && !hasWs) slot = qaSlot;
+                    if (hasQa && !hasWs)
+                    {
+                        slot = qaSlot;
+                        int loS = int.MaxValue, hiS = int.MinValue;
+                        if (ownFloorA < neighFloorA) { loS = Math.Min(loS, ownFloorA); hiS = Math.Max(hiS, neighFloorA); }
+                        if (ownFloorB < neighFloorB) { loS = Math.Min(loS, ownFloorB); hiS = Math.Max(hiS, neighFloorB); }
+                        if (neighFloorA < ownFloorA) { loS = Math.Min(loS, neighFloorA); hiS = Math.Max(hiS, ownFloorA); }
+                        if (neighFloorB < ownFloorB) { loS = Math.Min(loS, neighFloorB); hiS = Math.Max(hiS, ownFloorB); }
+                        if (QuadAboveFloorStep(sorted[0].minY, sorted[0].maxY, loS, hiS)) slot = wsSlot;
+                    }
                     else if (hasWs && !hasQa) slot = wsSlot;
                 }
 
-                var (_, ti, fc) = sorted[0];
+                var (_, ti, fc, _, _) = sorted[0];
                 SetBlockTexture(prjRoom.Blocks[target].Textures[slot], ti, fc, objectTextures[ti]);
                 continue;
             }
@@ -1577,7 +1586,7 @@ public class TrLevel : IDisposable
                 else if (i == sorted.Count - 1) slot = wsSlot;     // closest to ceiling
                 else slot = middleSlot;
 
-                var (_, textureIndex, face) = sorted[i];
+                var (_, textureIndex, face, _, _) = sorted[i];
                 SetBlockTexture(prjRoom.Blocks[target].Textures[slot], textureIndex, face, objectTextures[textureIndex]);
             }
         }
@@ -1592,7 +1601,7 @@ public class TrLevel : IDisposable
     /// a room wasn't square (NumX != NumZ).
     /// </summary>
     private static void ApplyRoomFaceTexture(PrjRoom prjRoom, LevelRoom levelRoom, RoomFace face, ObjectTexture[] objectTextures,
-        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>> pending,
+        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face, int minY, int maxY)>> pending,
         Dictionary<(int, int, bool), int> seamQuadCounts)
     {
         int textureIndex = face.Texture & 0x7FFF;
@@ -1707,7 +1716,7 @@ public class TrLevel : IDisposable
                 bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, neighborX, bz) ||
                     seamQuadCounts.GetValueOrDefault((ownX, bz, true)) >= 3;
                 ApplyWallFace(prjRoom, ownX, bz, neighborX, bz, avgY, textureIndex, face, objectTextures,
-                    qaSlot: 2, middleSlot: 4, wsSlot: 3, neighborUnreliable, pending);
+                    qaSlot: 2, middleSlot: 4, wsSlot: 3, minY, maxY, seamQuadCounts.GetValueOrDefault((ownX, bz, true)) == 1, neighborUnreliable, pending);
             }
             return;
         }
@@ -1724,7 +1733,7 @@ public class TrLevel : IDisposable
                 bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, bx, neighborZ) ||
                     seamQuadCounts.GetValueOrDefault((bx, ownZ, false)) >= 3;
                 ApplyWallFace(prjRoom, bx, ownZ, bx, neighborZ, avgY, textureIndex, face, objectTextures,
-                    qaSlot: 5, middleSlot: 7, wsSlot: 6, neighborUnreliable, pending);
+                    qaSlot: 5, middleSlot: 7, wsSlot: 6, minY, maxY, seamQuadCounts.GetValueOrDefault((bx, ownZ, false)) == 1, neighborUnreliable, pending);
             }
         }
     }
@@ -1811,8 +1820,8 @@ public class TrLevel : IDisposable
     /// </summary>
     private static void ApplyWallFace(PrjRoom prjRoom, int ownX, int ownZ, int neighborX, int neighborZ, int avgY,
         int textureIndex, RoomFace face, ObjectTexture[] objectTextures, int qaSlot, int middleSlot, int wsSlot,
-        bool neighborUnreliable,
-        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face)>> pending)
+        int quadMinY, int quadMaxY, bool loneQuad, bool neighborUnreliable,
+        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face, int minY, int maxY)>> pending)
     {
         int ownTarget = ownX * prjRoom.ZSize + ownZ;
         if (ownTarget < 0 || ownTarget >= prjRoom.Blocks.Length) return;
@@ -1828,8 +1837,8 @@ public class TrLevel : IDisposable
             // are known, instead of guessing from a fixed fraction of own's own span in isolation.
             bool isXDirection0 = qaSlot == 2;
             var key = (ownX, ownZ, isXDirection0);
-            if (!pending.TryGetValue(key, out var list)) pending[key] = list = new List<(int, int, RoomFace)>();
-            list.Add((avgY, textureIndex, face));
+            if (!pending.TryGetValue(key, out var list)) pending[key] = list = new List<(int, int, RoomFace, int, int)>();
+            list.Add((avgY, textureIndex, face, quadMinY, quadMaxY));
             return;
         }
         else if (hasNeighbor)
@@ -1914,12 +1923,30 @@ public class TrLevel : IDisposable
                     if (wsMirrorValidB) { loC = Math.Min(loC, ownCeilB); hiC = Math.Max(hiC, neighCeilB); }
                     if (avgY >= loC && avgY <= hiC) slot = wsSlot;
                 }
+                // A lone compiled quad that sits on the ceiling side of a real floor step, with no ceiling
+                // difference, is the reference's WS face and no QA exists there (DOCUMENTATION.md 2.21).
+                if (loneQuad && hasQaOnOwn && !hasWsOnOwn)
+                {
+                    int loS = int.MaxValue, hiS = int.MinValue;
+                    if (qaValidA) { loS = Math.Min(loS, ownFloorA); hiS = Math.Max(hiS, neighFloorA); }
+                    if (qaValidB) { loS = Math.Min(loS, ownFloorB); hiS = Math.Max(hiS, neighFloorB); }
+                    if (qaMirrorValidA) { loS = Math.Min(loS, neighFloorA); hiS = Math.Max(hiS, ownFloorA); }
+                    if (qaMirrorValidB) { loS = Math.Min(loS, neighFloorB); hiS = Math.Max(hiS, ownFloorB); }
+                    if (QuadAboveFloorStep(quadMinY, quadMaxY, loS, hiS)) slot = wsSlot;
+                }
             }
         }
 
         SetBlockTexture(prjRoom.Blocks[ownTarget].Textures[slot], textureIndex, face, objectTextures[textureIndex]);
     }
 
+    /// <summary>
+    /// True when a compiled wall quad does not cover its seam's floor-step band but lies next to it on
+    /// the smaller-Y side with its far end short of the band's far end. Measured on alexhub2 (single-quad
+    /// seams, floor step present, no ceiling step): 71 of 95 such seams are WS in the reference.
+    /// </summary>
+    private static bool QuadAboveFloorStep(int quadMinY, int quadMaxY, int loStep, int hiStep)
+        => loStep != int.MaxValue && quadMaxY < hiStep - 8 && quadMinY <= loStep + 8;
     private static void SetBlockTexture(BlockTex blockTex, int textureIndex, RoomFace face, ObjectTexture texture, byte rotation = 0, bool flip = false)
     {
         blockTex.Tipo = 0x0007;
