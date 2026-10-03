@@ -162,6 +162,7 @@ public static class Prj2Exporter
                 }
             }
 
+            SynthesizeWallHeights(room, trLevel.Rooms[i], pr);
             room.NormalizeRoomY();
             ExportLights(room, trLevel.Rooms[i], pr);
             level.Rooms[i] = room;
@@ -281,6 +282,98 @@ public static class Prj2Exporter
 
         Prj2Writer.SaveToPrj2(prj2FilePath, level);
         return warnings;
+    }
+
+    /// <summary>
+    /// Gives Wall/BorderWall sectors that sit next to a real sector the hidden floor/ceiling heights the TR4 mesh
+    /// implies. TR4 has no heights for wall sectors, and the flat placeholder heights make TombLib build a single
+    /// Middle face, so seams that carry 2-3+ stacked compiled quads lose all but one texture (DOCUMENTATION.md 2.23).
+    /// QA [floor, WF] + Middle [WF, WC] + WS [WC, ceiling] always tile the real sector's full height, so the visible
+    /// wall does not change; only where one texture band ends and the next begins. Boundaries come from the sorted
+    /// quad stack: 2 quads -> WF = WC = their shared edge (QA + WS); 3+ quads -> WF = top of the first quad, WC = bottom
+    /// of the last (QA + Middle + WS; at most 3 faces exist per seam). Validated against the hand-authored reference:
+    /// on seams with 3 quads and a straight wall edge, the reference's stored WF/WC equal these boundaries in 235 of 248.
+    /// A wall corner is shared by two seams; the first seam to claim it wins.
+    /// </summary>
+    private static void SynthesizeWallHeights(Room room, LevelRoom r1, PrjRoom pr)
+    {
+        var seams = new Dictionary<(int X, int Z, bool IsX), List<(int Lo, int Hi)>>();
+        foreach (var face in r1.Rectangles.Concat(r1.Triangles))
+        {
+            var vs = face.Vertices.Where(v => v < r1.Vertices.Length).Select(v => r1.Vertices[v]).ToArray();
+            if (vs.Length != face.Vertices.Length || vs.Length == 0) continue;
+            int minX = vs.Min(v => (int)v.X), maxX = vs.Max(v => (int)v.X);
+            int minY = vs.Min(v => (int)v.Y), maxY = vs.Max(v => (int)v.Y);
+            int minZ = vs.Min(v => (int)v.Z), maxZ = vs.Max(v => (int)v.Z);
+            double avgX = vs.Average(v => (double)v.X), avgZ = vs.Average(v => (double)v.Z);
+            bool xWall = Math.Abs(maxX - minX) <= 8, zWall = Math.Abs(maxZ - minZ) <= 8;
+            if (!xWall && !zWall) continue;
+            // Same frame as the sector heights written above: -TR Y + room YBottom.
+            var span = (Lo: -maxY + r1.YBottom, Hi: -minY + r1.YBottom);
+            void Add(int x, int z, bool isX)
+            {
+                if (!seams.TryGetValue((x, z, isX), out var list)) seams[(x, z, isX)] = list = new();
+                list.Add(span);
+            }
+            if (xWall)
+            {
+                int sx = (int)Math.Round(avgX / 1024.0);
+                if (sx <= 0 || sx >= pr.XSize) continue;
+                for (int z = Math.Clamp(minZ / 1024, 0, pr.ZSize - 1); z <= Math.Clamp((maxZ - 1) / 1024, 0, pr.ZSize - 1); z++) Add(sx, z, true);
+            }
+            else
+            {
+                int sz = (int)Math.Round(avgZ / 1024.0);
+                if (sz <= 0 || sz >= pr.ZSize) continue;
+                for (int x = Math.Clamp(minX / 1024, 0, pr.XSize - 1); x <= Math.Clamp((maxX - 1) / 1024, 0, pr.XSize - 1); x++) Add(x, sz, false);
+            }
+        }
+
+        bool IsWallBlock(int x, int z)
+        {
+            int id = pr.Blocks[x * pr.ZSize + z].Id;
+            return id == 0x1E || id == 0x06 || id == 0x0E;
+        }
+
+        // wall sector -> corner values [XnZn, XpZn, XnZp, XpZp]
+        var floorCorners = new Dictionary<(int, int), int?[]>();
+        var ceilCorners = new Dictionary<(int, int), int?[]>();
+
+        foreach (var ((ox, oz, isX), quads) in seams.OrderBy(k => k.Key.X).ThenBy(k => k.Key.Z).ThenBy(k => k.Key.IsX))
+        {
+            if (quads.Count < 2) continue;
+            int nx = isX ? ox - 1 : ox, nz = isX ? oz : oz - 1;
+            bool ownWall = IsWallBlock(ox, oz), neighborWall = IsWallBlock(nx, nz);
+            if (ownWall == neighborWall) continue; // need exactly one wall sector and one real sector
+
+            var sorted = quads.OrderBy(q => q.Lo).ThenBy(q => q.Hi).ToList();
+            int wf = sorted[0].Hi;
+            int wc = quads.Count == 2 ? wf : sorted[^1].Lo;
+            if (wf > wc) (wf, wc) = (wc, wf);
+            wf = (int)Math.Round(wf / 256.0) * 256;
+            wc = (int)Math.Round(wc / 256.0) * 256;
+
+            var wall = ownWall ? (ox, oz) : (nx, nz);
+            int[] corners = isX
+                ? (ownWall ? new[] { 0, 2 } : new[] { 1, 3 })   // wall's -X edge, or +X edge
+                : (ownWall ? new[] { 0, 1 } : new[] { 2, 3 });  // wall's -Z edge, or +Z edge
+            if (!floorCorners.TryGetValue(wall, out var fc)) floorCorners[wall] = fc = new int?[4];
+            if (!ceilCorners.TryGetValue(wall, out var cc)) ceilCorners[wall] = cc = new int?[4];
+            foreach (int c in corners)
+            {
+                if (fc[c] == null && cc[c] == null) { fc[c] = wf; cc[c] = wc; }
+            }
+        }
+
+        foreach (var (wall, fc) in floorCorners)
+        {
+            var sector = room.Sectors[wall.Item1, wall.Item2];
+            var cc = ceilCorners[wall];
+            if (fc[0] is int a0) { sector.Floor.XnZn = (short)a0; sector.Ceiling.XnZn = (short)cc[0]!.Value; }
+            if (fc[1] is int a1) { sector.Floor.XpZn = (short)a1; sector.Ceiling.XpZn = (short)cc[1]!.Value; }
+            if (fc[2] is int a2) { sector.Floor.XnZp = (short)a2; sector.Ceiling.XnZp = (short)cc[2]!.Value; }
+            if (fc[3] is int a3) { sector.Floor.XpZp = (short)a3; sector.Ceiling.XpZp = (short)cc[3]!.Value; }
+        }
     }
 
     /// <summary>

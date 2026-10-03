@@ -605,6 +605,39 @@ This also explains why Middle is over-assigned (about 2.5x the reference) and WS
 [floor, ceiling], so the visible wall shape does not change; only texture band boundaries do. Known risks: a wall
 sector corner is shared by two seams (X and Z edges) that may want different split heights, and the Floor/Ceiling
 corner sign/unit conventions of TombLib would have to be re-derived. Seams with 4+ quads can carry at most 3 faces.
+### 2.24 -- Hidden wall-sector heights synthesized from the compiled quad stack (closes most of the 2.23 gap)
+
+**Oracle (throwaway probe against `alexhub2_orig.prj2`):** on seams between a reference Floor sector and a reference
+Wall/BorderWall sector with 3 compiled quads and a straight wall edge, the wall's stored floor/ceiling (WF/WC) equal
+the quad boundaries (WF = top of the lowest quad, WC = bottom of the highest) in **235 of 248** cases. Single quads match
+WF/WC with an edge in 334 of 374. For 2 quads the reference mostly has ONE face (377 of 456 seams): TombLib's compiler
+splits a tall face at its midpoint into two quads, each half with its own object texture. Heights are in the same frame as
+the sector heights the exporter writes (`-TR Y + room YBottom`).
+
+**Implementation (`Prj2Exporter.SynthesizeWallHeights`, called before `NormalizeRoomY`):** for every seam with exactly one
+Wall/BorderWall sector and one real sector and 2+ compiled quads, set the wall sector's two edge corners:
+2 quads -> WF = WC = their shared edge (QA + WS); 3+ quads -> WF = top of the first, WC = bottom of the last (QA + Middle + WS).
+Values rounded to 256. A wall corner shared by two seams keeps the first claim. QA + Middle + WS always tile the real
+sector's full height, so the visible wall shape is unchanged; only the texture bands move.
+`TrLevel.ApplyWallFace`: an OWN-side border sector with 2+ quads now also uses the rank-based QA/Middle/WS pass (before,
+all its quads wrote to the same Middle slot and overwrote each other).
+
+**Result (PrjDiag + placement census):**
+
+| | before | after |
+|---|---|---|
+| compiled quads with a defined face in the exported prj2 | 1820 / 3057 | 2754 / 3057 |
+| textured wall faces | 2162 (reference defines 3487) | **3256** |
+| wall-tier label metric | 96.01% (FN 338) | **96.52%** (FN 179) |
+| WS coverage per direction | 21-31% | 87-92% |
+
+Floor/Ceiling rows unchanged. QA is now 140-148% of the reference (we texture each half of a split tall face, the
+reference has one authored face) and Middle 156-173%: expected, those are real compiled quads.
+
+**Left:** 303 quads still lack a face: 156 seams with 2 quads over one defined face are, almost certainly, two halves of
+a single tall QA face between two REAL sectors (TombLib cannot split a face, so one half cannot be textured);
+the rest are 4+ quad stacks capped at 3 faces. About 23 seams define a face without a texture (20 with 1 quad over 2
+faces). Floor2/Ceiling2 stay a structural limit (2.7). Only alexhub2 has been checked.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)

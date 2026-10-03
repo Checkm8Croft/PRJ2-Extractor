@@ -1855,6 +1855,10 @@ public class TrLevel : IDisposable
                 return;
             }
         }
+        // Own side is a border/solid sector (flattened heights): a seam with 2+ stacked quads needs the same rank-based
+        // QA/Middle/WS split as a border/solid neighbor does (lone quads were handled above).
+        if (borderSide == 1) neighborUnreliable = true;
+
         if (hasNeighbor && neighborUnreliable)
         {
             // Defer to FlushUnreliableWallSeams: collect this quad alongside every other real
