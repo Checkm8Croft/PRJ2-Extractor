@@ -638,6 +638,31 @@ reference has one authored face) and Middle 156-173%: expected, those are real c
 a single tall QA face between two REAL sectors (TombLib cannot split a face, so one half cannot be textured);
 the rest are 4+ quad stacks capped at 3 faces. About 23 seams define a face without a texture (20 with 1 quad over 2
 faces). Floor2/Ceiling2 stay a structural limit (2.7). Only alexhub2 has been checked.
+### 2.25 -- Geometry fidelity check of the synthesized wall heights (and what it did NOT fix)
+
+**Method (`PrjProbe`, now the fidelity probe; the 2.23 placement census is in git history at 2c472bb):** reload the
+exported prj2 with TombLib, take the Y extent of every defined QA/Middle/WS face on each Wall/BorderWall <-> real sector
+seam from TombLib's own `RoomGeometry` (`GetFaceLowestPoint`/`GetFaceHighestPoint`), and compare with the compiled TR4
+quads of the same seam (absolute Y, tolerance 40). Run on the 2.23 baseline (2c472bb) and on 2.24.
+
+| verdict (seams) | baseline 2c472bb | 2.24 |
+|---|---|---|
+| same extent, faces == quads | 4 + 29 + 71 + 236 | 14 + 192 + 284 + 236 |
+| same extent, faces merge/split quads | 149 + 211 + 284 + 15 | 139 + 48 + 71 + 15 |
+| face extends beyond TR4 stack | 82 | 82 |
+| HOLE (a TR4 quad not covered by any face) | 31 | 31 |
+| NO face defined | 27 | 27 |
+
+(per quad-count bucket 4+/3/2/1.) The synthesis only converts "merged" seams into one-face-per-quad seams; the extension,
+hole and no-face counts are identical before and after, so it introduced no new geometry error. Exact samples of the
+remaining cases: a real sector's ceiling at 7936 with the TR4 stack ending at 6912 (our WS/Middle reaches the ceiling, the TR4
+mesh stops, probably a portal opening above) and seams where a shared wall corner was claimed by another seam
+(`R0 (7,1)Z`: TR4 stack 4352..7936, ours one face 5376..7936). These are PRE-EXISTING (the flat placeholder heights
+produced the same counts) and are not part of the texture work.
+
+**Not verified visually:** Tomb Editor does load the exported prj2 (project opened without error), but the desktop
+screenshot tool returned more than its size limit, so there is no eyeball check of the room views. The check above is the
+substitute.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
