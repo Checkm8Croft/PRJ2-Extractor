@@ -711,6 +711,80 @@ public static class Prj2Exporter
         }
     }
     /// <summary>
+    /// Derives the rotation and mirror a wall QUAD needs so that each of TombLib's four face corners shows the
+    /// same texture corner as the compiled TR4 face does (DOCUMENTATION.md 2.26). TombLib builds a wall quad as
+    /// P0 = top at the wall's start, P1 = top at its end, P2 = bottom at its end, P3 = bottom at its start, and the
+    /// decode in <see cref="LoadTextureArea"/> puts texture-box corner (j - rotation) mod 4 on Pj (corner order
+    /// 0=TL,1=TR,2=BR,3=BL; with a mirror the box index is XOR 1). The start/end side depends on the face's
+    /// direction: PositiveX z..z+1, NegativeX z+1..z, PositiveZ x+1..x, NegativeZ x..x+1. Returns false (callers keep
+    /// the old rotation 0 / no mirror) for a missing source, a non-quad face or a corner pattern that is neither a
+    /// pure rotation nor a pure mirror.
+    /// </summary>
+    private static bool TryComputeWallQuadOrientation(BlockTex blockTex, SectorFace face, out byte rotation, out bool flip)
+    {
+        rotation = 0;
+        flip = false;
+        var source = blockTex.SourceFace;
+        var texture = blockTex.SourceTexture;
+        var owner = source?.Owner;
+        if (source == null || texture == null || owner == null || source.IsTriangle || source.Vertices.Length != 4) return false;
+        if (source.Vertices.Any(v => v >= owner.Vertices.Length)) return false;
+
+        string name = face.ToString();
+        bool isXWall = name.Contains("X_");
+        bool startIsMin = name.StartsWith("Wall_PositiveX") || name.StartsWith("Wall_NegativeZ");
+
+        var vs = source.Vertices.Select(v => owner.Vertices[v]).ToArray();
+        int Along(RoomVertex v) => isXWall ? v.Z : v.X;
+        int minAlong = vs.Min(Along), maxAlong = vs.Max(Along);
+        if (minAlong == maxAlong) return false;
+        int startAlong = startIsMin ? minAlong : maxAlong, endAlong = startIsMin ? maxAlong : minAlong;
+
+        // Corner index (into source.Vertices) of the top / bottom vertex at one end of the wall. TR Y grows downward.
+        int[]? EndCorners(int along)
+        {
+            var idx = Enumerable.Range(0, 4).Where(i => Math.Abs(Along(vs[i]) - along) <= 8).ToArray();
+            if (idx.Length != 2 || vs[idx[0]].Y == vs[idx[1]].Y) return null;
+            return vs[idx[0]].Y < vs[idx[1]].Y ? new[] { idx[0], idx[1] } : new[] { idx[1], idx[0] }; // [top, bottom]
+        }
+        var start = EndCorners(startAlong);
+        var end = EndCorners(endAlong);
+        if (start == null || end == null) return false;
+
+        int[] corner = { start[0], end[0], end[1], start[1] }; // P0..P3
+        if (corner.Distinct().Count() != 4) return false;
+
+        var uvs = corner.Select(i => ((int)(texture.Vertices[i].X >> 8), (int)(texture.Vertices[i].Y >> 8))).ToArray();
+        int minU = uvs.Min(c => c.Item1), maxU = uvs.Max(c => c.Item1), minV = uvs.Min(c => c.Item2), maxV = uvs.Max(c => c.Item2);
+        if (minU == maxU || minV == maxV) return false;
+
+        int Box((int u, int v) c)
+        {
+            bool atMaxU = Math.Abs(c.u - maxU) < Math.Abs(c.u - minU);
+            bool atMaxV = Math.Abs(c.v - maxV) < Math.Abs(c.v - minV);
+            return (atMaxU, atMaxV) switch { (false, false) => 0, (true, false) => 1, (true, true) => 2, (false, true) => 3 };
+        }
+        var b = uvs.Select(Box).ToArray();
+
+        int r = (4 - b[0]) % 4; // unmirrored: b[j] == (j - r) mod 4
+        if (Enumerable.Range(0, 4).All(j => b[j] == ((j - r) % 4 + 4) % 4))
+        {
+            rotation = (byte)r;
+            flip = false;
+            return true;
+        }
+
+        r = (4 - (b[0] ^ 1)) % 4; // mirrored: b[j] == ((j - r) mod 4) ^ 1
+        if (Enumerable.Range(0, 4).All(j => b[j] == ((((j - r) % 4 + 4) % 4) ^ 1)))
+        {
+            rotation = (byte)r;
+            flip = true;
+            return true;
+        }
+
+        return false;
+    }
+    /// <summary>
     /// Builds a TextureArea from one classic-PRJ BlockTex slot and writes it via
     /// Sector.SetFaceTexture. UV construction, rotation handling, triangle-corner selection and
     /// flip/blend-mode flags are ported verbatim from TombLib's PrjLoader.LoadTextureArea (its
@@ -750,14 +824,22 @@ public static class Prj2Exporter
             BlendMode = (blockTex.Flags1 & 0x08) != 0 ? BlendMode.Additive : BlendMode.Normal,
         };
 
+        bool flipUv = (blockTex.Flags1 & 0x80) != 0;
+        ushort rotation = blockTex.Rotation;
+        if (face.ToString().StartsWith("Wall_") && room.GetFaceShape(x, z, face) != FaceShape.Triangle
+            && TryComputeWallQuadOrientation(blockTex, face, out byte wallRotation, out bool wallFlip))
+        {
+            rotation = wallRotation;
+            flipUv = wallFlip;
+        }
+
         // Apply flipping.
-        if ((blockTex.Flags1 & 0x80) != 0)
+        if (flipUv)
         {
             (uv[0], uv[1]) = (uv[1], uv[0]);
             (uv[2], uv[3]) = (uv[3], uv[2]);
         }
 
-        ushort rotation = blockTex.Rotation;
         if (room.GetFaceShape(x, z, face) == FaceShape.Triangle)
         {
             switch (blockTex.Triangle)

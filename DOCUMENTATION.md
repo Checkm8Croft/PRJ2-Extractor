@@ -663,6 +663,32 @@ produced the same counts) and are not part of the texture work.
 **Not verified visually:** Tomb Editor does load the exported prj2 (project opened without error), but the desktop
 screenshot tool returned more than its size limit, so there is no eyeball check of the room views. The check above is the
 substitute.
+### 2.26 -- Wall quad rotation/mirror derived directly from the TR4 corner UVs
+
+**Problem:** wall faces always had rotation 0 and no mirror (floors/ceilings got theirs in 2.20). PrjProbe (now the wall UV
+check) compares TexCoord0-3 of every wall face that both our exported prj2 and the reference have textured at the same
+sector and key: 911 of 2378 exact (38.3%); about 280 more covered the same UV region with the corners in a different order
+(rotation or mirror).
+
+**TombLib facts (read from TombLib/LevelData/SectorGeometry and RoomGeometry.AddQuad):** a wall quad is built as P0 = top at
+the wall's start, P1 = top at its end, P2 = bottom at its end, P3 = bottom at its start (the same for QA, Middle and WS).
+Start/end by direction: PositiveX z..z+1, NegativeX z+1..z, PositiveZ x+1..x, NegativeZ x..x+1. `AddQuad` maps P0..P3 to
+TexCoord1, 2, 3, 0, and with the `LoadTextureArea` decode that puts texture-box corner (j - rotation) mod 4 on Pj
+(0=TL, 1=TR, 2=BR, 3=BL; mirrored: the box index is XOR 1).
+
+**Fix:** `Prj2Exporter.TryComputeWallQuadOrientation`. It takes the raw TR4 face (`BlockTex.SourceFace`/`SourceTexture`, new,
+set by `SetBlockTexture`; `RoomFace.Owner`, new, set in `ConvertToPrj`), finds the corner at each of P0..P3, reads its raw UV
+(`>> 8`), classifies it into the texture box and solves for rotation and mirror. It runs at export time because the same
+TR4 quad needs opposite orientations on a sector's Negative face and on the neighbor's Positive face (start and end swap).
+Pure rotation or pure mirror only; anything else, triangles and missing sources keep the old rotation 0.
+
+**Result (alexhub2):** exact **911 -> 1147 of 2378 (38.3% -> 48.2%)**; same region but different corner order about 280 -> 49,
+of which 34 are triangular wall faces (not handled) and 15 are quads. The tier label metric is unchanged (96.52%).
+The remaining mismatch is mostly different regions (about 1180), see the 2.23/2.24 analysis: halves of split faces,
+tier labels, and 268 faces whose reference texture is absent from the seam.
+
+**Left:** triangular wall faces (34 wrong orientation), the 15 leftover quads, and floor/ceiling TRIANGLES, which the same
+direct method can cover.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)

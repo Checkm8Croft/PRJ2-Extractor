@@ -1100,6 +1100,10 @@ public class TrLevel : IDisposable
         uint slots = NumRooms <= 100 ? 100 : NumRooms <= 200 ? 200u : 300u;
         var p = new TrProject(NumRooms, slots);
 
+        foreach (var lr in Rooms)
+            foreach (var rf in lr.Rectangles.Concat(lr.Triangles))
+                rf.Owner = lr;
+
         // Room-face texture usage determines the exported atlas: TextureBitmap (as read in Load())
         // mirrors ObjectTexture.TileAndFlag's unified room+object+bump tile numbering, but most of
         // that space is texture data used exclusively by WAD moveables/statics, which has no place
@@ -2007,6 +2011,8 @@ public class TrLevel : IDisposable
         blockTex.Rotation = rotation;
         blockTex.Triangle = 0;
         blockTex.Filler = 0;
+        blockTex.SourceFace = face;
+        blockTex.SourceTexture = texture;
     }
 
     /// <summary>

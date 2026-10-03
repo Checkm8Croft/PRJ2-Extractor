@@ -1,76 +1,92 @@
 using System.Threading;
+using System.Numerics;
 using PRJ2_Extractor.Core;
 using PRJ2_Extractor.Models;
 using TombLib.LevelData;
 using TombLib.LevelData.IO;
 using TombLib.LevelData.SectorEnums;
+using TombLib.Utils;
 
-// Geometry fidelity check (no editor needed): load our exported prj2 with TombLib, ask TombLib's own room geometry for the
-// Y extent of every wall face on each Wall/BorderWall <-> real sector seam, and compare with the compiled TR4 quads.
+// Wall texture UV check: for every wall face key that BOTH our exported prj2 and the reference have textured at the same
+// sector, compare TexCoord0-3: exact / same UV set but different corner order (rotation or mirror) / different region.
 using var level = new TrLevel();
 level.Load(@"C:\Users\Checkm8ra1n\Documents\alexhub2.tr4", new Progress<int>(v => { }));
-var settings = new Prj2Loader.Settings { IgnoreWads = true, IgnoreTextures = true, IgnoreSoundsCatalogs = true };
+var settings = new Prj2Loader.Settings { IgnoreWads = false, IgnoreTextures = false, IgnoreSoundsCatalogs = true };
 var ours = Prj2Loader.LoadFromPrj2(@"C:\Users\Checkm8ra1n\Documents\alexhub2_export_test.prj2", null, CancellationToken.None, settings).Rooms.Where(r => r != null).ToList();
+var refs = Prj2Loader.LoadFromPrj2(@"C:\Users\Checkm8ra1n\Documents\alexhub2_orig.prj2", null, CancellationToken.None, settings).Rooms.Where(r => r != null).ToList();
 
 bool RoomMatches(TombLib.LevelData.Room rr, LevelRoom r1) =>
     Math.Abs(rr.Position.X * 1024 - r1.X) < 1100 && Math.Abs(rr.Position.Z * 1024 - r1.Z) < 1100 && Math.Abs(rr.Position.Y + r1.YBottom) < 300;
 
 var tab = new Dictionary<string, int>(); var samples = new List<string>();
 void Count(string k) => tab[k] = tab.GetValueOrDefault(k) + 1;
-const float tol = 40f;
+bool Close(Vector2 a, Vector2 b) => Math.Abs(a.X - b.X) <= 0.6f && Math.Abs(a.Y - b.Y) <= 0.6f;
+string Fmt(TextureArea t) => $"[{t.TexCoord0.X:F0},{t.TexCoord0.Y:F0} {t.TexCoord1.X:F0},{t.TexCoord1.Y:F0} {t.TexCoord2.X:F0},{t.TexCoord2.Y:F0} {t.TexCoord3.X:F0},{t.TexCoord3.Y:F0}]";
+
+var faces = new[] {
+  SectorFace.Wall_NegativeX_QA, SectorFace.Wall_NegativeX_Middle, SectorFace.Wall_NegativeX_WS,
+  SectorFace.Wall_PositiveX_QA, SectorFace.Wall_PositiveX_Middle, SectorFace.Wall_PositiveX_WS,
+  SectorFace.Wall_NegativeZ_QA, SectorFace.Wall_NegativeZ_Middle, SectorFace.Wall_NegativeZ_WS,
+  SectorFace.Wall_PositiveZ_QA, SectorFace.Wall_PositiveZ_Middle, SectorFace.Wall_PositiveZ_WS };
 
 for (int i = 0; i < level.Rooms.Length; i++)
 {
     var r1 = level.Rooms[i];
-    var room = ours.FirstOrDefault(rr => RoomMatches(rr, r1));
-    if (room == null) continue;
-    int xs = room.NumXSectors, zs = room.NumZSectors; float py = room.Position.Y;
-    var seams = new Dictionary<(int, int, bool), List<(float lo, float hi)>>();
-    foreach (var face in r1.Rectangles.Concat(r1.Triangles))
+    var o = ours.FirstOrDefault(rr => RoomMatches(rr, r1)); var r = refs.FirstOrDefault(rr => RoomMatches(rr, r1));
+    if (o == null || r == null) continue;
+    for (int x = 0; x < Math.Min(o.NumXSectors, r.NumXSectors); x++)
+    for (int z = 0; z < Math.Min(o.NumZSectors, r.NumZSectors); z++)
     {
-        var vs = face.Vertices.Where(v => v < r1.Vertices.Length).Select(v => r1.Vertices[v]).ToArray();
-        if (vs.Length != face.Vertices.Length || vs.Length == 0) continue;
-        int minX = vs.Min(v => (int)v.X), maxX = vs.Max(v => (int)v.X), minZ = vs.Min(v => (int)v.Z), maxZ = vs.Max(v => (int)v.Z);
-        int minY = vs.Min(v => (int)v.Y), maxY = vs.Max(v => (int)v.Y);
-        double avgX = vs.Average(v => (double)v.X), avgZ = vs.Average(v => (double)v.Z);
-        bool xWall = Math.Abs(maxX - minX) <= 8, zWall = Math.Abs(maxZ - minZ) <= 8;
-        var q = (lo: (float)-maxY, hi: (float)-minY); // TR4 absolute, Y up
-        void Add((int, int, bool) k) { if (!seams.TryGetValue(k, out var l)) seams[k] = l = new(); l.Add(q); }
-        if (xWall) { int sx = (int)Math.Round(avgX / 1024.0); if (sx <= 0 || sx >= xs) continue;
-            for (int z = Math.Clamp(minZ / 1024, 0, zs - 1); z <= Math.Clamp((maxZ - 1) / 1024, 0, zs - 1); z++) Add((sx, z, true)); }
-        else if (zWall) { int sz = (int)Math.Round(avgZ / 1024.0); if (sz <= 0 || sz >= zs) continue;
-            for (int x = Math.Clamp(minX / 1024, 0, xs - 1); x <= Math.Clamp((maxX - 1) / 1024, 0, xs - 1); x++) Add((x, sz, false)); }
-    }
-
-    foreach (var ((ox, oz, isX), quads) in seams)
-    {
-        int nx = isX ? ox - 1 : ox, nz = isX ? oz : oz - 1;
-        var so = room.Sectors[ox, oz]; var sn = room.Sectors[nx, nz];
-        if ((so.Type != SectorType.Floor) == (sn.Type != SectorType.Floor)) continue; // wall <-> real seams only
-        var neg = isX ? new[] { SectorFace.Wall_NegativeX_QA, SectorFace.Wall_NegativeX_Middle, SectorFace.Wall_NegativeX_WS } : new[] { SectorFace.Wall_NegativeZ_QA, SectorFace.Wall_NegativeZ_Middle, SectorFace.Wall_NegativeZ_WS };
-        var pos = isX ? new[] { SectorFace.Wall_PositiveX_QA, SectorFace.Wall_PositiveX_Middle, SectorFace.Wall_PositiveX_WS } : new[] { SectorFace.Wall_PositiveZ_QA, SectorFace.Wall_PositiveZ_Middle, SectorFace.Wall_PositiveZ_WS };
-        var faces = new List<(float lo, float hi)>();
-        for (int k = 0; k < 3; k++)
+        var so = o.Sectors[x, z].GetFaceTextures(); var sr = r.Sectors[x, z].GetFaceTextures();
+        foreach (var f in faces)
         {
-            if (room.IsFaceDefined(ox, oz, neg[k])) faces.Add((room.GetFaceLowestPoint(ox, oz, neg[k]) + py, room.GetFaceHighestPoint(ox, oz, neg[k]) + py));
-            else if (room.IsFaceDefined(nx, nz, pos[k])) faces.Add((room.GetFaceLowestPoint(nx, nz, pos[k]) + py, room.GetFaceHighestPoint(nx, nz, pos[k]) + py));
+            if (!so.TryGetValue(f, out var a) || !sr.TryGetValue(f, out var b)) continue;
+            if (a.TextureIsUnavailable || b.TextureIsUnavailable) continue;
+            var A = new[] { a.TexCoord0, a.TexCoord1, a.TexCoord2, a.TexCoord3 }; var B = new[] { b.TexCoord0, b.TexCoord1, b.TexCoord2, b.TexCoord3 };
+            string tier = f.ToString().EndsWith("QA") ? "QA" : f.ToString().EndsWith("WS") ? "WS" : "Middle";
+            bool quadA = a.TexCoord3 != a.TexCoord2 && b.TexCoord3 != b.TexCoord2;
+            bool exact = Enumerable.Range(0, 4).All(k => Close(A[k], B[k]));
+            if (exact) { Count($"{tier}: exact"); continue; }
+            bool sameSet = A.All(u => B.Any(v => Close(u, v))) && B.All(v => A.Any(u => Close(u, v)));
+            // find the cyclic shift / mirror that maps ours to the reference
+            string how = "none";
+            if (sameSet)
+            {
+                for (int s = 1; s < 4 && how == "none"; s++) if (Enumerable.Range(0, 4).All(k => Close(A[(k + s) % 4], B[k]))) how = $"rotate {s}";
+                if (how == "none") for (int s = 0; s < 4 && how == "none"; s++) if (Enumerable.Range(0, 4).All(k => Close(A[((s - k) % 4 + 4) % 4], B[k]))) how = $"mirror(+{s})";
+                if (how == "none") how = "other permutation";
+                Count($"{tier}: same region, {(a.TexCoord2 == a.TexCoord3 ? "TRIANGLE" : "quad")}, {how}");
+            }
+            else {
+                float aMinX = A.Min(u => u.X), aMaxX = A.Max(u => u.X), aMinY = A.Min(u => u.Y), aMaxY = A.Max(u => u.Y);
+                float bMinX = B.Min(u => u.X), bMaxX = B.Max(u => u.X), bMinY = B.Min(u => u.Y), bMaxY = B.Max(u => u.Y);
+                bool aInB = aMinX >= bMinX - 1 && aMaxX <= bMaxX + 1 && aMinY >= bMinY - 1 && aMaxY <= bMaxY + 1;
+                bool bInA = bMinX >= aMinX - 1 && bMaxX <= aMaxX + 1 && bMinY >= aMinY - 1 && bMaxY <= aMaxY + 1;
+                bool overlap = aMinX < bMaxX && bMinX < aMaxX && aMinY < bMaxY && bMinY < aMaxY;
+                string kind = aInB ? "ours is a SUB-rect of ref" : bInA ? "ref is a sub-rect of ours" : overlap ? "partial overlap" : "unrelated (disjoint)";
+                if (kind.StartsWith("unrelated"))
+                {
+                    // is the reference texture present on ANY wall face of this seam in OUR export? (right texture, wrong tier/side)
+                    bool isX = f.ToString().Contains("X_"); bool neg = f.ToString().Contains("Negative");
+                    int nx = isX ? (neg ? x - 1 : x + 1) : x, nz = isX ? z : (neg ? z - 1 : z + 1);
+                    var cand = new List<TextureArea>();
+                    foreach (var (sx, sz) in new[] { (x, z), (nx, nz) })
+                    {
+                        if (sx < 0 || sz < 0 || sx >= o.NumXSectors || sz >= o.NumZSectors) continue;
+                        var d = o.Sectors[sx, sz].GetFaceTextures();
+                        foreach (var g in faces) if (d.TryGetValue(g, out var c) && !c.TextureIsUnavailable) cand.Add(c);
+                    }
+                    bool found = cand.Any(c => { var C = new[] { c.TexCoord0, c.TexCoord1, c.TexCoord2, c.TexCoord3 }; return B.All(v => C.Any(u => Close(u, v))); });
+                    kind += found ? " -> ref texture IS on another face of this seam in ours (tier/side mismatch)" : " -> ref texture absent from this seam in ours";
+                }
+                Count($"{tier}: different region, " + kind);
+            }
+            if (samples.Count < 6 && sameSet) samples.Add($"R{i} ({x},{z}) {f}  ours {Fmt(a)}  ref {Fmt(b)}  -> {how}");
         }
-        int n = Math.Min(quads.Count, 4); string nk = n >= 4 ? "4+" : n.ToString();
-        float tLo = quads.Min(q => q.lo), tHi = quads.Max(q => q.hi);
-        if (faces.Count == 0) { Count($"quads={nk}: NO face defined"); continue; }
-        float fLo = faces.Min(f => f.lo), fHi = faces.Max(f => f.hi);
-        bool sameExtent = Math.Abs(fLo - tLo) <= tol && Math.Abs(fHi - tHi) <= tol;
-        bool outside = fLo < tLo - tol || fHi > tHi + tol;
-        // hole: any TR4 quad mid-height not covered by a face
-        int holes = quads.Count(q => { float m = (q.lo + q.hi) / 2; return !faces.Any(f => m >= f.lo - tol && m <= f.hi + tol); });
-        // exact: each face matches some quad range
-        int exact = faces.Count(f => quads.Any(q => Math.Abs(q.lo - f.lo) <= tol && Math.Abs(q.hi - f.hi) <= tol));
-        string verdict = holes > 0 ? "HOLE (TR4 quad not covered)" : outside ? "face extends beyond TR4 stack" : sameExtent ? (exact == faces.Count ? "same extent, faces == quads" : "same extent, faces merge/split quads") : "covered, extent differs";
-        Count($"quads={nk}: {verdict}");
-        if (samples.Count < 8 && (holes > 0 || outside))
-            samples.Add($"R{i} ({ox},{oz}){(isX ? "X" : "Z")} TR4 {string.Join(" | ", quads.OrderBy(q => q.lo).Select(q => $"{q.lo:F0}..{q.hi:F0}"))}  ours {string.Join(" | ", faces.OrderBy(f => f.lo).Select(f => $"{f.lo:F0}..{f.hi:F0}"))}");
     }
 }
 foreach (var kv in tab.OrderBy(k => k.Key)) Console.WriteLine($"{kv.Value,5}  {kv.Key}");
+int tot = tab.Values.Sum(), ex = tab.Where(k => k.Key.EndsWith("exact")).Sum(k => k.Value);
+Console.WriteLine($"compared faces: {tot}; exact: {ex} ({100.0 * ex / Math.Max(1, tot):F1}%)");
 foreach (var s in samples) Console.WriteLine(s);
 return 0;

@@ -60,6 +60,12 @@ public class BlockTex
     public int Index;
     public byte Flags1, Rotation, Triangle;
     public ushort Filler;
+
+    // Source of this assignment, kept so Prj2Exporter can derive wall-quad rotation/mirror from the
+    // raw TR4 corner UVs once it knows which sector face (and therefore which start/end direction)
+    // actually receives the texture. Null when not set (callers then fall back to Rotation/Flags1).
+    public RoomFace? SourceFace;
+    public ObjectTexture? SourceTexture;
 }
 
 public class Block
