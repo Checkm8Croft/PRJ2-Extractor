@@ -578,6 +578,33 @@ nearest defined tier (order QA, Middle, WS) that has no texture of its own; same
 **Rule for future work:** judge wall changes by BOTH numbers. The label metric (PrjDiag section 1) measures
 agreement with the reference's tier labels; the textured-face count (section 5) measures what Tomb Editor will show.
 The ~1300 reference wall faces we still lack mostly come from hidden wall-sector heights we do not synthesize.
+### 2.23 -- What is left on walls: compiled quads without a face to carry them (placement census)
+
+**Measured (PrjProbe, now the placement census; reloads our exported prj2 and counts per interior seam):** every one
+of the 1904 interior seams covered by a compiled quad gets at least one wall texture in our Blocks (100%), so the
+slot assignment is not what is missing. The gap is in the exported geometry: of 3057 compiled quads that need a face
+(capped at 3 per seam), our flat Wall/BorderWall sectors define a face for only 1820 (textured: 1819). Deficit: **1237
+quads**.
+
+| compiled quads on the seam | faces our geometry defines | seams |
+|---|---|---|
+| 1 | 1 | 611 |
+| 2 | 1 | 430 |
+| 3 | 1 | 227 |
+| 4+ | 1 | 109 |
+| 2 | 2 | 67 |
+| 4+ | 3 | 46 |
+
+Seams with 2/3/4+ stacked quads but one defined face: 766 (430+227+109). Cause: `Prj2Exporter` flattens Wall/BorderWall
+sectors to Floor=YBottom, Ceiling=YTop, so TombLib builds a single Middle face; the TR4 mesh (like the reference, whose
+hidden wall heights split the span into QA/Middle/WS) has up to 3 stacked quads, and the extra textures have no face.
+This also explains why Middle is over-assigned (about 2.5x the reference) and WS/QA under-assigned in the per-face table.
+
+**Not done (decision pending):** synthesize hidden wall-sector heights from the sorted quad boundaries of each seam
+(n=2: WF=WC=boundary -> QA+WS; n=3: WF, WC = the two boundaries -> QA+Middle+WS). Expected: QA+Middle+WS always tile
+[floor, ceiling], so the visible wall shape does not change; only texture band boundaries do. Known risks: a wall
+sector corner is shared by two seams (X and Z edges) that may want different split heights, and the Floor/Ceiling
+corner sign/unit conventions of TombLib would have to be re-derived. Seams with 4+ quads can carry at most 3 faces.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
