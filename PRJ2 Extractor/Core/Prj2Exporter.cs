@@ -5,6 +5,7 @@ using TombLib;
 using TombLib.LevelData;
 using TombLib.LevelData.IO;
 using TombLib.LevelData.SectorEnums;
+using TombLib.LevelData.SectorStructs;
 using TombLib.Utils;
 using System.Diagnostics;
 
@@ -711,6 +712,60 @@ public static class Prj2Exporter
         }
     }
     /// <summary>
+    /// Direct TexCoord derivation for a triangular floor/ceiling face (DOCUMENTATION.md 2.27), replacing the
+    /// Triangle index / split-direction / rotation arithmetic of the decode below. TombLib's AddTriangle gives
+    /// vertex Pj the face's TexCoordJ, and the three vertices come from RoomGeometry in order. Each one is matched
+    /// by its (X, Z) corner to the compiled TR4 triangle's vertex, whose raw UV (>> 8) lands on one of the texture
+    /// box's corners (0=TL, 1=TR, 2=BR, 3=BL); TexCoordJ is that box corner. Returns false (callers keep the old
+    /// decode) for a missing source, a source that is not a triangle, an unmatched vertex or UVs that do not sit on
+    /// three distinct box corners.
+    /// </summary>
+    private static bool TryComputeTriangleTexCoords(Room room, int x, int z, SectorFace face, BlockTex blockTex, Vector2[] box, out Vector2[] texCoords)
+    {
+        texCoords = new Vector2[3];
+        var source = blockTex.SourceFace;
+        var texture = blockTex.SourceTexture;
+        var owner = source?.Owner;
+        if (source == null || texture == null || owner == null || !source.IsTriangle || source.Vertices.Length != 3) return false;
+        if (source.Vertices.Any(v => v >= owner.Vertices.Length)) return false;
+        if (!room.RoomGeometry.VertexRangeLookup.TryGetValue(new SectorFaceIdentity(x, z, face), out var range) || range.Count != 3) return false;
+
+        var raw = source.Vertices.Select(v => owner.Vertices[v]).ToArray();
+        var uvs = new (int U, int V)[3];
+        var used = new HashSet<int>();
+        for (int j = 0; j < 3; j++)
+        {
+            var p = room.RoomGeometry.VertexPositions[range.Start + j];
+            int match = -1;
+            for (int i = 0; i < 3; i++)
+            {
+                if (Math.Abs(raw[i].X - p.X) > 8 || Math.Abs(raw[i].Z - p.Z) > 8) continue;
+                if (match >= 0) return false; // ambiguous
+                match = i;
+            }
+            if (match < 0 || !used.Add(match)) return false;
+            uvs[j] = (texture.Vertices[match].X >> 8, texture.Vertices[match].Y >> 8);
+        }
+
+        int minU = uvs.Min(c => c.U), maxU = uvs.Max(c => c.U), minV = uvs.Min(c => c.V), maxV = uvs.Max(c => c.V);
+        if (minU == maxU || minV == maxV) return false;
+
+        var corner = new int[3];
+        for (int j = 0; j < 3; j++)
+        {
+            bool atMaxU = Math.Abs(uvs[j].U - maxU) < Math.Abs(uvs[j].U - minU);
+            bool atMaxV = Math.Abs(uvs[j].V - maxV) < Math.Abs(uvs[j].V - minV);
+            corner[j] = (atMaxU, atMaxV) switch { (false, false) => 0, (true, false) => 1, (true, true) => 2, (false, true) => 3 };
+        }
+        if (corner.Distinct().Count() != 3) return false;
+
+        // Ceilings: RoomGeometry reverses the vertex order (and TexCoord0<->2) after building, and the compiler swaps it back
+        // with Mirror(true), so the stored TexCoordJ belongs to the geometry vertex 2 - J.
+        bool reversed = face == SectorFace.Ceiling || face == SectorFace.Ceiling_Triangle2;
+        for (int j = 0; j < 3; j++) texCoords[j] = box[corner[reversed ? 2 - j : j]];
+        return true;
+    }
+    /// <summary>
     /// Derives the rotation and mirror a wall QUAD needs so that each of TombLib's four face corners shows the
     /// same texture corner as the compiled TR4 face does (DOCUMENTATION.md 2.26). TombLib builds a wall quad as
     /// P0 = top at the wall's start, P1 = top at its end, P2 = bottom at its end, P3 = bottom at its start, and the
@@ -817,6 +872,8 @@ public static class Prj2Exporter
             new Vector2(texInfo.X + texStartCoord, texInfo.Y + texInfo.Bottom + (1.0f - texStartCoord)),
         };
 
+        var boxUv = (Vector2[])uv.Clone(); // texture-box corners TL, TR, BR, BL before any flip/rotation
+
         var texture = new TextureArea
         {
             Texture = levelTexture,
@@ -842,6 +899,16 @@ public static class Prj2Exporter
 
         if (room.GetFaceShape(x, z, face) == FaceShape.Triangle)
         {
+            if (TryComputeTriangleTexCoords(room, x, z, face, blockTex, boxUv, out var triUv))
+            {
+                texture.TexCoord0 = triUv[0];
+                texture.TexCoord1 = triUv[1];
+                texture.TexCoord2 = triUv[2];
+                texture.TexCoord3 = triUv[2];
+                sector.SetFaceTexture(face, texture);
+                return;
+            }
+
             switch (blockTex.Triangle)
             {
                 case 0: texture.TexCoord0 = uv[0]; texture.TexCoord1 = uv[1]; texture.TexCoord2 = uv[3]; break;

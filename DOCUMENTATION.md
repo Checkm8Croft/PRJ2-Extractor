@@ -689,6 +689,46 @@ tier labels, and 268 faces whose reference texture is absent from the seam.
 
 **Left:** triangular wall faces (34 wrong orientation), the 15 leftover quads, and floor/ceiling TRIANGLES, which the same
 direct method can cover.
+### 2.27 -- Floor/ceiling TRIANGLE texture coordinates derived directly from the TR4 corner UVs
+
+**Why a new metric:** comparing TexCoord order face by face mixes two things: faces whose triangle geometry is the same in
+our room and the reference, and faces where it is not. PrjProbe (now the render-equivalence probe) therefore reloads both
+prj2 files, builds TombLib's `RoomGeometry` and compares the UV that ends up on each (X, Z) vertex of a face, only for faces
+with the same vertex set.
+
+**TombLib facts (RoomGeometry.AddTriangle, the ceiling reversal loop, Compilers/Rooms.cs):** vertex Pj of a triangle gets the
+face's TexCoordJ. For ceilings, RoomGeometry reverses the vertex order after building (and swaps TexCoord0/2 in
+`TriangleTextureAreas`), and the compiler undoes it with `texture.Mirror(true)`, so the STORED TexCoordJ of a ceiling
+triangle belongs to geometry vertex 2 - J.
+
+**Fix (`Prj2Exporter.TryComputeTriangleTexCoords`):** for a triangular floor/ceiling face, take the three vertices from
+`RoomGeometry.VertexRangeLookup`, match each by its (X, Z) corner to the compiled TR4 triangle's vertex, read that vertex's raw
+UV (`>> 8`), classify it onto a texture-box corner (0=TL, 1=TR, 2=BR, 3=BL; the three must be distinct) and use that
+box corner as the TexCoord (reversed for ceilings). The old Triangle-index / split-direction / rotation decode stays as the
+fallback when a vertex does not match, the source is not a triangle or the UVs are not on three distinct corners.
+
+**Result (alexhub2, same-vertex-set faces; faces whose triangle geometry differs from the reference are not comparable):**
+
+| face | old decode: renders same / differs | direct: renders same / differs |
+|---|---|---|
+| Floor (triangle) | 45 / 126 | **123 / 48** |
+| Floor_Triangle2 | 4 / 156 | **48 / 112** |
+| Ceiling (triangle) | 5 / 11 | **15 / 1** |
+| Ceiling_Triangle2 | 0 / 13 | **1 / 12** |
+
+Overall 54 -> 187 matching faces. TexCoord-order exact match over all floor/ceiling faces 59.9% -> 67.5% before the ceiling
+fix. The tier-label metric is unchanged (96.52%).
+
+**Not explained (do not chase without new information):** 173 floor/ceiling triangles still render as an exact
+horizontal mirror (flipU) of the reference. Raw TR4 triangles have the same handedness (UV order against world order) in
+essentially every case, while the reference has the opposite handedness on those faces, and the TR4 compiler
+(TexInfoManager) only rotates, never mirrors, so the information is not in the TR4. The direct method reproduces what
+the TR4 file shows; the reference's mirror is probably an authoring choice or a compile quirk we cannot see.
+
+**Also found, not looked at:** 686 floor/ceiling triangle faces whose vertex set differs from the reference
+(334 Floor, 315 Floor_Triangle2, 20 and 17 ceiling), i.e. our exported sector splits the surface into triangles differently.
+About 70 faces (Floor 32, Ceiling 22, Ceiling_Triangle2 17) fall back to the old decode because a vertex did not match.
+Ceiling QUADS: 33 of 444 still render differently from the reference (25 as a pure vertical mirror).
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
