@@ -758,6 +758,17 @@ is per portal, not per sector, so every sector of the portal then gets its faces
 floor faces textured in ours only, over portals the reference leaves at `Opacity None`, i.e. floor drawn over portal holes.
 In the reference 237 faces belong to `TraversableFaces` portals and others to `None`, with no sector-level evidence that tells
 them apart. Reverted. Revisit only with a per-portal signal (for example the door quad's own texture, if the TR4 keeps one).
+### 2.29 -- Triangular WALL faces use the direct TexCoord derivation too
+
+The triangle method of 2.27 (`TryComputeTriangleTexCoords`) was written for floors and ceilings, which tell their three corners apart by (X, Z).
+A wall triangle has vertices that share (X, Z) and differ only in Y, so the match returned "ambiguous" and the face fell back to the old
+decode. The matcher now also compares Y when two source vertices share (X, Z): TR4 Y grows downward, TombLib's `VertexPositions` are relative to the
+room and grow upward, so the test is `-rawY` against `position.Y + room.Position.Y` (tolerance 16). For triangular wall faces TombLib's
+AddTriangle uses the same vertex-to-TexCoord relation as for floors (vertex Pj gets TexCoordJ), so nothing else changes.
+
+**Result (wall UV check, same sector and key as the reference):** wall triangles with the right UV region but a different corner order
+34 -> 6 (QA 5, WS 1); exact TexCoords 1147 -> **1170 of 2378 (49.2%)**; the 15 leftover quads are unchanged. Tier-label metric unchanged
+(96.52%).
 ---
 
 ## Key structural lessons (apply to future work on this codebase)

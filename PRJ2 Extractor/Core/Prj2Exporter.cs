@@ -790,10 +790,14 @@ public static class Prj2Exporter
         for (int j = 0; j < 3; j++)
         {
             var p = room.RoomGeometry.VertexPositions[range.Start + j];
+            // Floor/ceiling corners are told apart by (X, Z); a wall triangle has vertices that share (X, Z) and differ in Y, so those
+            // are matched in 3D (TR4 Y grows downward, TombLib's room-relative Y grows upward).
             int match = -1;
             for (int i = 0; i < 3; i++)
             {
                 if (Math.Abs(raw[i].X - p.X) > 8 || Math.Abs(raw[i].Z - p.Z) > 8) continue;
+                bool sameXZAsAnother = Enumerable.Range(0, 3).Any(o => o != i && Math.Abs(raw[o].X - raw[i].X) <= 8 && Math.Abs(raw[o].Z - raw[i].Z) <= 8);
+                if (sameXZAsAnother && Math.Abs(-raw[i].Y - (p.Y + room.Position.Y)) > 16) continue;
                 if (match >= 0) return false; // ambiguous
                 match = i;
             }
