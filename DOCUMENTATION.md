@@ -769,6 +769,30 @@ AddTriangle uses the same vertex-to-TexCoord relation as for floors (vertex Pj g
 **Result (wall UV check, same sector and key as the reference):** wall triangles with the right UV region but a different corner order
 34 -> 6 (QA 5, WS 1); exact TexCoords 1147 -> **1170 of 2378 (49.2%)**; the 15 leftover quads are unchanged. Tier-label metric unchanged
 (96.52%).
+### 2.30 -- Generalization check on 29 other TR4 levels (no reference prj2 available) and the flag comparison
+
+**Flags:** for the 4910 face keys that both our export and the reference have textured, DoubleSided and BlendMode are equal in all of them
+(everything is Normal / not double-sided in the reference, so alexhub2 does not exercise additive or double-sided textures; this
+says nothing about levels that use them).
+
+**Method:** every number so far was measured on alexhub2. PrjProbe (now the generalization probe; set `PROBE_TR4` to a .tr4 path) exports
+a level with the real `Prj2Exporter`, reloads it with TombLib and compares OUR exported geometry with the compiled TR4 itself, so no
+reference is needed: (1) wall quad-sector pairs (capped 3 per seam) that end up with a defined AND textured face, (2) wall faces vs the
+compiled quads (hole / face beyond the TR4 stack / no face), (3) floor/ceiling triangulation vs the compiled triangles. It was run on the 28
+original TR4 game levels (`Tomb-Raider-4\01..29`, compiled by Core's tools, never touched by TombLib) and on `TEST1.TR4`; alexhub2 as the control
+reproduces the earlier numbers exactly.
+
+**Result (28 levels, 0 crashes):**
+- Wall quads with a defined, textured face: **77.6% to 98.2%, about 92% typical** (alexhub2: 89.9%). The weakest are 12-Desert-Railroad
+  (77.6%, 114 export warnings) and 29-Menkaures-Pyramid (85.6%).
+- Sectors with two compiled triangles whose triangulation differs from ours: **10 of about 6000** (floor and ceiling together).
+  Every other level reports 0. So the split-direction fix of 2.28 and the floor behavior hold outside alexhub2.
+- Wall geometry vs the compiled quads: holes 1-66 seams per level and "face beyond the TR4 stack" 1-148, except 07-Temple-of-Karnak with 228
+  holes; the same two kinds of defect as on alexhub2 (2.25), not new ones.
+- Export warnings are mostly "Portal overlaps another" (up to 114 on 12-Desert-Railroad); they belong to the portal export, not to the textures.
+
+**Not covered:** orientation of the textures (rotation/mirror) and the tier labels need the reference, so they are only validated on alexhub2.
+These levels are original TR4 files, not TombLib compiles, so a level compiled by TombLib from a prj2 is the closer match to alexhub2.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
