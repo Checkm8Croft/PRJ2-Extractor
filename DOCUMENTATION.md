@@ -793,6 +793,24 @@ reproduces the earlier numbers exactly.
 
 **Not covered:** orientation of the textures (rotation/mirror) and the tier labels need the reference, so they are only validated on alexhub2.
 These levels are original TR4 files, not TombLib compiles, so a level compiled by TombLib from a prj2 is the closer match to alexhub2.
+### 2.31 -- Floor/ceiling QUAD texture coordinates derived directly too (28 ceiling quads fixed)
+
+**Attribution first:** the 33 ceiling quads that rendered differently from the reference (2.27) could be our error, a TR4/reference
+disagreement like the floor triangles, or both. PrjProbe (now the quad attribution probe) compares, for single-sector quads, the position of each
+corner's UV inside the texture box in three places: the TR4 raw face, what TombLib draws for our face and what it draws for the reference.
+Ceiling quads (378): ours == TR4 in 344, differs in 34; in 28 of those the reference == TR4, so those 28 were OUR errors in the old
+rotation/mirror arithmetic. Floor quads (916): ours == TR4 in 908; the 8 that differ (and 6 ceiling ones) also differ from the reference under this
+normalization, probably symmetric or degenerate UV boxes; not investigated.
+
+**Fix (`Prj2Exporter.TryComputeFloorCeilingQuadTexCoords`):** the same direct method as the triangles. `AddQuad` gives TexCoord((j + 1) mod 4) to
+corner pj and stores the vertices as p1, p2, p0, p3, p0, p2; for ceilings the first and last vertex of each triangle are then swapped, giving
+p0, p2, p1, p2, p0, p3. The corner positions are read from `RoomGeometry` at those slots, matched by (X, Z) to the TR4 quad's vertices, and each raw UV
+(`>> 8`) is classified onto a box corner. Only quads that span exactly one sector; anything else (multi-sector quads, unmatched corners) keeps the
+old arithmetic.
+
+**Result (alexhub2):** ours == TR4 for ceiling quads 344 -> 372 of 378 with no case left where the reference agrees with the TR4 and we do not; ceiling quads
+rendering differently from the reference 33 -> 4; floor quads unchanged (1042 same, 908 == TR4). Tier-label metric unchanged (96.52%). The
+generalization probe of 2.30 still runs on 01-Angkor-Wat and 12-Desert-Railroad with the same wall coverage and no crash.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)

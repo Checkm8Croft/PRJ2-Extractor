@@ -1,102 +1,73 @@
 using System.IO;
+using System.Numerics;
 using System.Threading;
 using PRJ2_Extractor.Core;
 using PRJ2_Extractor.Models;
-using TombLib;
 using TombLib.LevelData;
 using TombLib.LevelData.IO;
 using TombLib.LevelData.SectorEnums;
 using TombLib.LevelData.SectorStructs;
 
-// Generalization check on a level WITHOUT a reference prj2. Usage: set PROBE_TR4 to a .tr4 path (default: alexhub2).
-// Exports with the real Prj2Exporter, reloads with TombLib and reports (1) warnings/crashes, (2) how many compiled wall quads
-// got a defined, textured face, (3) wall-face geometry vs the compiled quads, (4) floor/ceiling triangulation vs compiled triangles.
-string tr4 = Environment.GetEnvironmentVariable("PROBE_TR4") ?? @"C:\Users\Checkm8ra1n\Documents\alexhub2.tr4";
-string outPath = Path.Combine(Path.GetTempPath(), "probe_export.prj2");
+// Is OUR floor/ceiling QUAD texture physically what the compiled TR4 shows? Compare, per sector corner (X, Z), the position of the UV
+// inside the texture box (0/1 in u and v) between the TR4 raw face and what TombLib draws for our face. Also report the reference's answer
+// so a disagreement can be attributed (ours vs TR4 vs reference).
 using var level = new TrLevel();
-level.Load(tr4, new Progress<int>(v => { }));
-var warnings = Prj2Exporter.Export(level, outPath);
-Console.WriteLine($"level: {Path.GetFileName(tr4)}  rooms={level.Rooms.Length}  export warnings={warnings.Count}");
-foreach (var w in warnings.Take(6)) Console.WriteLine("  - " + (w.Length > 150 ? w[..150] : w));
-var settings = new Prj2Loader.Settings { IgnoreWads = true, IgnoreTextures = false, IgnoreSoundsCatalogs = true };
-var ours = Prj2Loader.LoadFromPrj2(outPath, null, CancellationToken.None, settings).Rooms.Where(r => r != null).ToList();
-foreach (var r in ours) r.BuildGeometry(useLegacyCode: false);
-
+level.Load(@"C:\Users\Checkm8ra1n\Documents\alexhub2.tr4", new Progress<int>(v => { }));
+var settings = new Prj2Loader.Settings { IgnoreWads = false, IgnoreTextures = false, IgnoreSoundsCatalogs = true };
+var ours = Prj2Loader.LoadFromPrj2(@"C:\Users\Checkm8ra1n\Documents\alexhub2_export_test.prj2", null, CancellationToken.None, settings).Rooms.Where(r => r != null).ToList();
+var refs = Prj2Loader.LoadFromPrj2(@"C:\Users\Checkm8ra1n\Documents\alexhub2_orig.prj2", null, CancellationToken.None, settings).Rooms.Where(r => r != null).ToList();
+foreach (var r in ours.Concat(refs)) r.BuildGeometry(useLegacyCode: false);
 bool RoomMatches(TombLib.LevelData.Room rr, LevelRoom r1) =>
     Math.Abs(rr.Position.X * 1024 - r1.X) < 1100 && Math.Abs(rr.Position.Z * 1024 - r1.Z) < 1100 && Math.Abs(rr.Position.Y + r1.YBottom) < 300;
-string Sig(IEnumerable<(int, int)> pts) => string.Join(";", pts.OrderBy(c => c).Select(c => $"{c.Item1},{c.Item2}"));
 
-var wall = new Dictionary<string, int>(); var tri = new Dictionary<string, int>();
-long quadSectorPairs = 0, wallTextured = 0; int unmatched = 0; const float tol = 40f;
-foreach (var r1 in level.Rooms)
+// normalized (u, v) in {0,1} per (X sector corner, Z sector corner), or null
+Dictionary<(int, int), (int, int)>? Norm(IEnumerable<((int, int) key, Vector2 uv)> pts)
 {
-    var room = ours.FirstOrDefault(rr => RoomMatches(rr, r1));
-    if (room == null) { unmatched++; continue; }
-    int xs = room.NumXSectors, zs = room.NumZSectors; float py = room.Position.Y;
-
-    // ---- wall seams
-    var seams = new Dictionary<(int, int, bool), List<(float lo, float hi)>>();
-    foreach (var face in r1.Rectangles.Concat(r1.Triangles))
+    var l = pts.ToList(); if (l.Count == 0) return null;
+    float minU = l.Min(p => p.uv.X), maxU = l.Max(p => p.uv.X), minV = l.Min(p => p.uv.Y), maxV = l.Max(p => p.uv.Y);
+    if (maxU - minU < 1 || maxV - minV < 1) return null;
+    var d = new Dictionary<(int, int), (int, int)>();
+    foreach (var (k, uv) in l) d[k] = (uv.X - minU > maxU - uv.X ? 1 : 0, uv.Y - minV > maxV - uv.Y ? 1 : 0);
+    return d;
+}
+Dictionary<(int, int), (int, int)>? Rendered(TombLib.LevelData.Room room, int x, int z, SectorFace f)
+{
+    if (!room.RoomGeometry.VertexRangeLookup.TryGetValue(new SectorFaceIdentity(x, z, f), out var range)) return null;
+    var pts = new List<((int, int), Vector2)>();
+    for (int i = range.Start; i < range.Start + range.Count; i++)
     {
-        if (face.Vertices.Any(v => v >= r1.Vertices.Length)) continue;
-        var vs = face.Vertices.Select(v => r1.Vertices[v]).ToArray();
-        int minX = vs.Min(v => (int)v.X), maxX = vs.Max(v => (int)v.X), minZ = vs.Min(v => (int)v.Z), maxZ = vs.Max(v => (int)v.Z);
-        int minY = vs.Min(v => (int)v.Y), maxY = vs.Max(v => (int)v.Y);
-        double avgX = vs.Average(v => (double)v.X), avgZ = vs.Average(v => (double)v.Z);
-        bool xWall = Math.Abs(maxX - minX) <= 8, zWall = Math.Abs(maxZ - minZ) <= 8;
-        var q = ((float)-maxY, (float)-minY);
-        void Add((int, int, bool) k) { if (!seams.TryGetValue(k, out var l)) seams[k] = l = new(); l.Add(q); }
-        if (xWall) { int sx = (int)Math.Round(avgX / 1024.0); if (sx <= 0 || sx >= xs) continue; for (int z = Math.Clamp(minZ / 1024, 0, zs - 1); z <= Math.Clamp((maxZ - 1) / 1024, 0, zs - 1); z++) Add((sx, z, true)); }
-        else if (zWall) { int sz = (int)Math.Round(avgZ / 1024.0); if (sz <= 0 || sz >= zs) continue; for (int x = Math.Clamp(minX / 1024, 0, xs - 1); x <= Math.Clamp((maxX - 1) / 1024, 0, xs - 1); x++) Add((x, sz, false)); }
+        var p = room.RoomGeometry.VertexPositions[i]; var t = room.RoomGeometry.TriangleTextureAreas[i / 3];
+        pts.Add((((int)Math.Round(p.X / 1024.0), (int)Math.Round(p.Z / 1024.0)), (i % 3) switch { 0 => t.TexCoord0, 1 => t.TexCoord1, _ => t.TexCoord2 }));
     }
-    foreach (var ((ox, oz, isX), quads) in seams)
-    {
-        int nx = isX ? ox - 1 : ox, nz = isX ? oz : oz - 1;
-        var so = room.Sectors[ox, oz]; var sn = room.Sectors[nx, nz];
-        var neg = isX ? new[] { SectorFace.Wall_NegativeX_QA, SectorFace.Wall_NegativeX_Middle, SectorFace.Wall_NegativeX_WS } : new[] { SectorFace.Wall_NegativeZ_QA, SectorFace.Wall_NegativeZ_Middle, SectorFace.Wall_NegativeZ_WS };
-        var pos = isX ? new[] { SectorFace.Wall_PositiveX_QA, SectorFace.Wall_PositiveX_Middle, SectorFace.Wall_PositiveX_WS } : new[] { SectorFace.Wall_PositiveZ_QA, SectorFace.Wall_PositiveZ_Middle, SectorFace.Wall_PositiveZ_WS };
-        var faces = new List<(float lo, float hi)>(); int textured = 0;
-        var tex1 = so.GetFaceTextures(); var tex2 = sn.GetFaceTextures();
-        for (int k = 0; k < 3; k++)
-        {
-            if (room.IsFaceDefined(ox, oz, neg[k])) { faces.Add((room.GetFaceLowestPoint(ox, oz, neg[k]) + py, room.GetFaceHighestPoint(ox, oz, neg[k]) + py)); if (tex1.TryGetValue(neg[k], out var t) && !t.TextureIsUnavailable) textured++; }
-            else if (room.IsFaceDefined(nx, nz, pos[k])) { faces.Add((room.GetFaceLowestPoint(nx, nz, pos[k]) + py, room.GetFaceHighestPoint(nx, nz, pos[k]) + py)); if (tex2.TryGetValue(pos[k], out var t) && !t.TextureIsUnavailable) textured++; }
-        }
-        int need = Math.Min(quads.Count, 3); quadSectorPairs += need; wallTextured += Math.Min(textured, need);
-        string nk = quads.Count >= 4 ? "4+" : quads.Count.ToString();
-        if (faces.Count == 0) { wall[$"quads={nk}: NO face defined"] = wall.GetValueOrDefault($"quads={nk}: NO face defined") + 1; continue; }
-        float tLo = quads.Min(q => q.lo), tHi = quads.Max(q => q.hi), fLo = faces.Min(f => f.lo), fHi = faces.Max(f => f.hi);
-        int holes = quads.Count(q => { float m = (q.lo + q.hi) / 2; return !faces.Any(f => m >= f.lo - tol && m <= f.hi + tol); });
-        string v = holes > 0 ? "HOLE" : (fLo < tLo - tol || fHi > tHi + tol) ? "face extends beyond TR4 stack" : "ok (covered)";
-        wall[v] = wall.GetValueOrDefault(v) + 1;
-    }
+    return Norm(pts);
+}
+bool Same(Dictionary<(int, int), (int, int)> a, Dictionary<(int, int), (int, int)> b) => a.Count == b.Count && a.All(kv => b.TryGetValue(kv.Key, out var v) && v == kv.Value);
 
-    // ---- floor/ceiling triangulation
-    var compiled = new Dictionary<(int, int, bool), HashSet<string>>();
-    foreach (var tf in r1.Triangles)
+var tab = new Dictionary<string, int>();
+void Count(string k) => tab[k] = tab.GetValueOrDefault(k) + 1;
+for (int i = 0; i < level.Rooms.Length; i++)
+{
+    var r1 = level.Rooms[i]; var o = ours.FirstOrDefault(rr => RoomMatches(rr, r1)); var r = refs.FirstOrDefault(rr => RoomMatches(rr, r1)); if (o == null || r == null) continue;
+    float py = o.Position.Y;
+    foreach (var q in r1.Rectangles)
     {
-        if (tf.Vertices.Any(v => v >= r1.Vertices.Length)) continue;
-        var vs = tf.Vertices.Select(v => r1.Vertices[v]).ToArray();
-        if (vs.Max(v => (int)v.X) - vs.Min(v => (int)v.X) < 1000 || vs.Max(v => (int)v.Z) - vs.Min(v => (int)v.Z) < 1000) continue;
-        int sx = (int)Math.Floor(vs.Min(v => (int)v.X) / 1024.0 + 0.01), sz = (int)Math.Floor(vs.Min(v => (int)v.Z) / 1024.0 + 0.01);
-        if (sx < 0 || sz < 0 || sx >= xs || sz >= zs) continue;
-        var s = room.Sectors[sx, sz]; float absY = vs.Average(v => -(float)v.Y);
+        if (q.Vertices.Any(v => v >= r1.Vertices.Length)) continue;
+        var vs = q.Vertices.Select(v => r1.Vertices[v]).ToArray();
+        if (vs.Max(v => (int)v.X) - vs.Min(v => (int)v.X) != 1024 || vs.Max(v => (int)v.Z) - vs.Min(v => (int)v.Z) != 1024) continue; // exactly one sector
+        int sx = vs.Min(v => (int)v.X) / 1024, sz = vs.Min(v => (int)v.Z) / 1024;
+        if (sx < 0 || sz < 0 || sx >= o.NumXSectors || sz >= o.NumZSectors || sx >= r.NumXSectors || sz >= r.NumZSectors) continue;
+        var s = o.Sectors[sx, sz]; float absY = vs.Average(v => -(float)v.Y);
         float fl = (float)new[] { s.Floor.XnZn, s.Floor.XpZn, s.Floor.XnZp, s.Floor.XpZp }.Average() + py, ce = (float)new[] { s.Ceiling.XnZn, s.Ceiling.XpZn, s.Ceiling.XnZp, s.Ceiling.XpZp }.Average() + py;
-        var key = (sx, sz, Math.Abs(absY - fl) <= Math.Abs(absY - ce)); if (!compiled.TryGetValue(key, out var set)) compiled[key] = set = new();
-        set.Add(Sig(vs.Select(v => ((int)Math.Round(v.X / 1024.0), (int)Math.Round(v.Z / 1024.0)))));
-    }
-    foreach (var ((sx, sz, isFloor), set) in compiled)
-    {
-        var mine = new HashSet<string>();
-        foreach (var f in isFloor ? new[] { SectorFace.Floor, SectorFace.Floor_Triangle2 } : new[] { SectorFace.Ceiling, SectorFace.Ceiling_Triangle2 })
-            if (room.RoomGeometry.VertexRangeLookup.TryGetValue(new SectorFaceIdentity(sx, sz, f), out var range) && range.Count == 3)
-                mine.Add(Sig(Enumerable.Range(range.Start, 3).Select(k => { var p = room.RoomGeometry.VertexPositions[k]; return ((int)Math.Round(p.X / 1024.0), (int)Math.Round(p.Z / 1024.0)); })));
-        string kind = $"{(isFloor ? "floor" : "ceiling")} TR4 {set.Count} tri / ours {mine.Count} tri: " + (mine.SetEquals(set) ? "== TR4" : "DIFFERS");
-        tri[kind] = tri.GetValueOrDefault(kind) + 1;
+        bool isFloor = Math.Abs(absY - fl) <= Math.Abs(absY - ce);
+        var face = isFloor ? SectorFace.Floor : SectorFace.Ceiling;
+        var ot = level.ObjectTextures[q.Texture & 0x7FFF];
+        var raw = Norm(Enumerable.Range(0, 4).Select(k => (((int)Math.Round(vs[k].X / 1024.0), (int)Math.Round(vs[k].Z / 1024.0)), new Vector2(ot.Vertices[k].X >> 8, ot.Vertices[k].Y >> 8))));
+        var a = Rendered(o, sx, sz, face); var b = Rendered(r, sx, sz, face);
+        if (raw == null || a == null || b == null) continue;
+        if (o.Sectors[sx, sz].GetFaceTexture(face).TextureIsUnavailable || r.Sectors[sx, sz].GetFaceTexture(face).TextureIsUnavailable) continue;
+        string who = $"{(isFloor ? "floor" : "ceiling")} quad: ours==TR4 {(Same(a, raw) ? "yes" : "NO ")}, reference==TR4 {(Same(b, raw) ? "yes" : "NO ")}";
+        Count(who);
     }
 }
-Console.WriteLine($"unmatched rooms: {unmatched}");
-Console.WriteLine($"wall quad-sector pairs (capped 3/seam): {quadSectorPairs}; with a defined+textured face: {wallTextured} ({100.0 * wallTextured / Math.Max(1, quadSectorPairs):F1}%)");
-Console.WriteLine("--- wall faces vs compiled quads ---"); foreach (var kv in wall.OrderBy(k => k.Key)) Console.WriteLine($"{kv.Value,6}  {kv.Key}");
-Console.WriteLine("--- floor/ceiling triangulation vs compiled triangles ---"); foreach (var kv in tri.OrderBy(k => k.Key)) Console.WriteLine($"{kv.Value,6}  {kv.Key}");
+foreach (var kv in tab.OrderBy(k => k.Key)) Console.WriteLine($"{kv.Value,5}  {kv.Key}");
 return 0;

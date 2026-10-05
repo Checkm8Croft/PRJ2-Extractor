@@ -766,6 +766,59 @@ public static class Prj2Exporter
         }
     }
     /// <summary>
+    /// Direct TexCoord derivation for a single-sector floor/ceiling QUAD (DOCUMENTATION.md 2.31), replacing the
+    /// rotation/mirror arithmetic. RoomGeometry.AddQuad gives the face's TexCoord((j + 1) mod 4) to corner pj, and stores the
+    /// six vertices as p1, p2, p0, p3, p0, p2 (floor); for ceilings it then swaps the first and last vertex of each triangle,
+    /// leaving p0, p2, p1, p2, p0, p3. The corner positions are read from there, each is matched by (X, Z) to the compiled TR4
+    /// quad's vertex, and its raw UV (>> 8) is classified onto a texture-box corner (0=TL, 1=TR, 2=BR, 3=BL). Returns false
+    /// (callers keep the old arithmetic) for a missing source, a quad that does not span exactly this sector, an unmatched
+    /// corner or UVs that are not on four distinct box corners.
+    /// </summary>
+    private static bool TryComputeFloorCeilingQuadTexCoords(Room room, int x, int z, SectorFace face, BlockTex blockTex, Vector2[] box, out Vector2[] texCoords)
+    {
+        texCoords = new Vector2[4];
+        var source = blockTex.SourceFace;
+        var texture = blockTex.SourceTexture;
+        var owner = source?.Owner;
+        if (source == null || texture == null || owner == null || source.IsTriangle || source.Vertices.Length != 4) return false;
+        if (source.Vertices.Any(v => v >= owner.Vertices.Length)) return false;
+        if (!room.RoomGeometry.VertexRangeLookup.TryGetValue(new SectorFaceIdentity(x, z, face), out var range) || range.Count != 6) return false;
+
+        var raw = source.Vertices.Select(v => owner.Vertices[v]).ToArray();
+        if (raw.Max(v => (int)v.X) - raw.Min(v => (int)v.X) != 1024 || raw.Max(v => (int)v.Z) - raw.Min(v => (int)v.Z) != 1024) return false;
+
+        int[] offsets = face == SectorFace.Ceiling ? new[] { 0, 2, 1, 5 } : new[] { 2, 0, 1, 3 }; // vertex slots of p0, p1, p2, p3
+        var uvs = new (int U, int V)[4];
+        var used = new HashSet<int>();
+        for (int j = 0; j < 4; j++)
+        {
+            var p = room.RoomGeometry.VertexPositions[range.Start + offsets[j]];
+            int match = -1;
+            for (int i = 0; i < 4; i++)
+            {
+                if (Math.Abs(raw[i].X - p.X) > 8 || Math.Abs(raw[i].Z - p.Z) > 8) continue;
+                if (match >= 0) return false;
+                match = i;
+            }
+            if (match < 0 || !used.Add(match)) return false;
+            uvs[j] = (texture.Vertices[match].X >> 8, texture.Vertices[match].Y >> 8);
+        }
+
+        int minU = uvs.Min(c => c.U), maxU = uvs.Max(c => c.U), minV = uvs.Min(c => c.V), maxV = uvs.Max(c => c.V);
+        if (minU == maxU || minV == maxV) return false;
+        var corner = new int[4];
+        for (int j = 0; j < 4; j++)
+        {
+            bool atMaxU = Math.Abs(uvs[j].U - maxU) < Math.Abs(uvs[j].U - minU);
+            bool atMaxV = Math.Abs(uvs[j].V - maxV) < Math.Abs(uvs[j].V - minV);
+            corner[j] = (atMaxU, atMaxV) switch { (false, false) => 0, (true, false) => 1, (true, true) => 2, (false, true) => 3 };
+        }
+        if (corner.Distinct().Count() != 4) return false;
+
+        for (int k = 0; k < 4; k++) texCoords[k] = box[corner[(k + 3) % 4]]; // TexCoordK belongs to corner p((K + 3) mod 4)
+        return true;
+    }
+    /// <summary>
     /// Direct TexCoord derivation for a triangular floor/ceiling face (DOCUMENTATION.md 2.27), replacing the
     /// Triangle index / split-direction / rotation arithmetic of the decode below. TombLib's AddTriangle gives
     /// vertex Pj the face's TexCoordJ, and the three vertices come from RoomGeometry in order. Each one is matched
@@ -953,6 +1006,17 @@ public static class Prj2Exporter
         {
             (uv[0], uv[1]) = (uv[1], uv[0]);
             (uv[2], uv[3]) = (uv[3], uv[2]);
+        }
+
+        if ((face == SectorFace.Floor || face == SectorFace.Ceiling) && room.GetFaceShape(x, z, face) != FaceShape.Triangle
+            && TryComputeFloorCeilingQuadTexCoords(room, x, z, face, blockTex, boxUv, out var quadUv))
+        {
+            texture.TexCoord0 = quadUv[0];
+            texture.TexCoord1 = quadUv[1];
+            texture.TexCoord2 = quadUv[2];
+            texture.TexCoord3 = quadUv[3];
+            sector.SetFaceTexture(face, texture);
+            return;
         }
 
         if (room.GetFaceShape(x, z, face) == FaceShape.Triangle)
