@@ -164,6 +164,7 @@ public static class Prj2Exporter
             }
 
             SynthesizeWallHeights(room, trLevel.Rooms[i], pr);
+            ApplyCompiledTriangleSplits(room, trLevel.Rooms[i], pr);
             room.NormalizeRoomY();
             ExportLights(room, trLevel.Rooms[i], pr);
             level.Rooms[i] = room;
@@ -285,6 +286,59 @@ public static class Prj2Exporter
         return warnings;
     }
 
+    /// <summary>
+    /// Sets SplitDirectionIsXEqualsZ of non-planar floor/ceiling sectors from the diagonal the compiled TR4 mesh really
+    /// uses (DOCUMENTATION.md 2.28). The flag was only set when the sector carried a FloorData triangulation function, and
+    /// the ceiling convention did not always agree with the compiled geometry. A horizontal sector with exactly two
+    /// compiled triangles shares one diagonal: if the corner missing from the first triangle is XpZn or XnZp the diagonal
+    /// joins XnZn and XpZp (x == z), otherwise it joins XpZn and XnZp. Sectors with a real DiagonalSplit, or without two
+    /// consistent triangles, are left alone.
+    /// </summary>
+    private static void ApplyCompiledTriangleSplits(Room room, LevelRoom r1, PrjRoom pr)
+    {
+        var found = new Dictionary<(int X, int Z, bool IsFloor), List<int>>(); // missing-corner id per triangle: 0 XnZn, 1 XpZn, 2 XnZp, 3 XpZp
+        foreach (var tf in r1.Triangles)
+        {
+            if (tf.Vertices.Any(v => v >= r1.Vertices.Length)) continue;
+            var vs = tf.Vertices.Select(v => r1.Vertices[v]).ToArray();
+            int minX = vs.Min(v => (int)v.X), maxX = vs.Max(v => (int)v.X), minZ = vs.Min(v => (int)v.Z), maxZ = vs.Max(v => (int)v.Z);
+            if (maxX - minX < 1000 || maxZ - minZ < 1000) continue; // not a horizontal sector triangle
+            int sx = (int)Math.Round(minX / 1024.0), sz = (int)Math.Round(minZ / 1024.0);
+            if (sx < 0 || sz < 0 || sx >= room.NumXSectors || sz >= room.NumZSectors) continue;
+
+            var corners = new HashSet<int>();
+            foreach (var v in vs)
+            {
+                int cx = (int)Math.Round(v.X / 1024.0) - sx, cz = (int)Math.Round(v.Z / 1024.0) - sz;
+                if (cx is < 0 or > 1 || cz is < 0 or > 1) { corners.Clear(); break; }
+                corners.Add(cx + 2 * cz);
+            }
+            if (corners.Count != 3) continue;
+            int missing = Enumerable.Range(0, 4).First(c => !corners.Contains(c));
+
+            var s = room.Sectors[sx, sz];
+            double avgH = vs.Average(v => -(double)v.Y) + r1.YBottom;
+            double floorH = new[] { s.Floor.XnZn, s.Floor.XpZn, s.Floor.XnZp, s.Floor.XpZp }.Average();
+            double ceilH = new[] { s.Ceiling.XnZn, s.Ceiling.XpZn, s.Ceiling.XnZp, s.Ceiling.XpZp }.Average();
+            bool isFloor = Math.Abs(avgH - floorH) <= Math.Abs(avgH - ceilH);
+            var key = (sx, sz, isFloor);
+            if (!found.TryGetValue(key, out var list)) found[key] = list = new();
+            list.Add(missing);
+        }
+
+        foreach (var ((x, z, isFloor), missing) in found)
+        {
+            if (missing.Count != 2) continue;
+            // The two triangles of one diagonal miss the two corners that are NOT on it, i.e. opposite corners.
+            if (missing[0] + missing[1] != 3) continue;
+            var sector = room.Sectors[x, z];
+            if ((isFloor ? sector.Floor.DiagonalSplit : sector.Ceiling.DiagonalSplit) != DiagonalSplit.None) continue;
+            // Missing corners XpZn (1) and XnZp (2) -> diagonal XnZn-XpZp (x == z). SectorSurface is a struct, so write through the field.
+            bool xEqualsZ = missing[0] == 1 || missing[0] == 2;
+            if (isFloor) sector.Floor.SplitDirectionIsXEqualsZ = xEqualsZ;
+            else sector.Ceiling.SplitDirectionIsXEqualsZ = xEqualsZ;
+        }
+    }
     /// <summary>
     /// Gives Wall/BorderWall sectors that sit next to a real sector the hidden floor/ceiling heights the TR4 mesh
     /// implies. TR4 has no heights for wall sectors, and the flat placeholder heights make TombLib build a single

@@ -729,6 +729,35 @@ the TR4 file shows; the reference's mirror is probably an authoring choice or a 
 (334 Floor, 315 Floor_Triangle2, 20 and 17 ceiling), i.e. our exported sector splits the surface into triangles differently.
 About 70 faces (Floor 32, Ceiling 22, Ceiling_Triangle2 17) fall back to the old decode because a vertex did not match.
 Ceiling QUADS: 33 of 444 still render differently from the reference (25 as a pure vertical mirror).
+### 2.28 -- The 686 "different" triangle faces, the ceiling split direction, and a rejected portal-opacity fix
+
+**Where the 686 come from:** floor/ceiling triangle faces whose vertex set differs between our prj2 and the reference
+(2.27). Heights and `DiagonalSplit` are equal on those sectors; `SplitDirectionIsXEqualsZ` differs on about 60% of them.
+PrjProbe (now the triangulation probe) compares each sector's floor/ceiling triangles with the TRIANGLES COMPILED IN THE TR4
+(horizontal faces with a 1024 x 1024 extent, classified floor/ceiling by height) instead of with the reference.
+Result: where the vertex set differs from the reference, OUR triangulation agrees with the TR4 in 451 of 491 floor sectors, the
+reference's own TombLib geometry in none of them. So on those faces the reference prj2 and the compiled TR4 disagree and our
+export is not at fault (building the reference with TombLib's legacy geometry to test a compile-mode explanation crashes in
+`LegacyWallGeometry` on this level, so that explanation is untested).
+
+**Real defect found: ceiling split direction.** `SplitDirectionIsXEqualsZ` was only set from FloorData triangulation
+functions; for ceilings it disagreed with the TR4 mesh. Of the ceiling sectors with two compiled triangles, 17 of 30 differed.
+`Prj2Exporter.ApplyCompiledTriangleSplits` now sets the flag of a non-planar floor/ceiling sector with `DiagonalSplit.None` from the
+diagonal the TR4 triangles actually use (two triangles whose missing corners are opposite; missing XpZn or XnZp -> diagonal
+XnZn-XpZp -> x == z). `SectorSurface` is a struct, so the flag is written through `sector.Floor` / `sector.Ceiling`.
+Result: 17 -> 0 ceiling sectors that differ; the 414 floor sectors with two triangles stay equal to the TR4. Tier-label metric and
+per-face coverage are unchanged; ceiling triangle "different vertex set" faces against the reference drop from 37 to 3.
+
+**Remaining floor mismatches with the TR4 (not fixed):** 39 sectors have two triangles in the TR4 but one in our room, because a
+triangular floor portal (`GetFloorRoomConnectionInfo` -> TriangularPortalXnZn/XpZn/XnZp/XpZp) makes `RoomGeometry` drop the
+triangle over the portal; and 30 sectors have one triangle in the TR4 and two in ours. That is the cause of most of the missing
+`Floor_Triangle2` textures (486 of 548).
+
+**Rejected: `PortalOpacity.TraversableFaces` on portals that still show faces.** Setting it fixes the 39, but `HasTexturedFaces`
+is per portal, not per sector, so every sector of the portal then gets its faces. Measured on the exported prj2: it added 185
+floor faces textured in ours only, over portals the reference leaves at `Opacity None`, i.e. floor drawn over portal holes.
+In the reference 237 faces belong to `TraversableFaces` portals and others to `None`, with no sector-level evidence that tells
+them apart. Reverted. Revisit only with a per-portal signal (for example the door quad's own texture, if the TR4 keeps one).
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
