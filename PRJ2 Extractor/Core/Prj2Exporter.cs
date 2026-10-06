@@ -204,7 +204,7 @@ public static class Prj2Exporter
             var room = tombRooms[i];
             if (pr.Id == 1 || room == null) continue;
 
-            var groups = new Dictionary<(PortalDirection Direction, int Target), (int X0, int Z0, int X1, int Z1)>();
+            var groups = new Dictionary<(PortalDirection Direction, int Target), HashSet<(int X, int Z)>>();
 
             foreach (var door in pr.Doors)
             {
@@ -231,13 +231,13 @@ public static class Prj2Exporter
                 int z1 = Math.Clamp(door.ZPos + door.ZSize - 1, z0, room.NumZSectors - 1);
 
                 var key = (direction.Value, targetIndex);
-                if (groups.TryGetValue(key, out var acc))
-                    groups[key] = (Math.Min(acc.X0, x0), Math.Min(acc.Z0, z0), Math.Max(acc.X1, x1), Math.Max(acc.Z1, z1));
-                else
-                    groups[key] = (x0, z0, x1, z1);
+                if (!groups.TryGetValue(key, out var cells)) groups[key] = cells = new();
+                for (int cx = x0; cx <= x1; cx++)
+                    for (int cz = z0; cz <= z1; cz++)
+                        cells.Add((cx, cz));
             }
 
-            foreach (var (key, rect) in groups)
+            foreach (var (key, cells) in groups)
             {
                 // TombLib's Room.AddObject auto-creates the mirrored portal in the adjoining room, so
                 // adding it again from that room's own (independent, TR4-sourced) door list would
@@ -246,15 +246,18 @@ public static class Prj2Exporter
                 if (key.Target < i) continue;
 
                 var adjoiningRoom = tombRooms[key.Target]!;
-                var area = new RectangleInt2(rect.X0, rect.Z0, rect.X1, rect.Z1);
-                var portal = new PortalInstance(area, key.Direction, adjoiningRoom);
-                try
+                foreach (var rect in DecomposeIntoRectangles(cells))
                 {
-                    room.AddObject(level, portal);
-                }
-                catch (Exception ex)
-                {
-                    warnings.Add($"Room {i} ({room.Name}): portal to room {key.Target} [{key.Direction}] area ({rect.X0},{rect.Z0})-({rect.X1},{rect.Z1}) skipped: {ex.Message}");
+                    var area = new RectangleInt2(rect.X0, rect.Z0, rect.X1, rect.Z1);
+                    var portal = new PortalInstance(area, key.Direction, adjoiningRoom);
+                    try
+                    {
+                        room.AddObject(level, portal);
+                    }
+                    catch (Exception ex)
+                    {
+                        warnings.Add($"Room {i} ({room.Name}): portal to room {key.Target} [{key.Direction}] area ({rect.X0},{rect.Z0})-({rect.X1},{rect.Z1}) skipped: {ex.Message}");
+                    }
                 }
             }
         }
@@ -286,6 +289,30 @@ public static class Prj2Exporter
         return warnings;
     }
 
+    /// <summary>
+    /// Splits a set of sector cells into disjoint rectangles that cover exactly those cells (DOCUMENTATION.md 2.32). The
+    /// portal export used to add ONE portal covering the bounding box of all doors to the same room, which also covered
+    /// sectors the TR4 never opened: TombLib then treated them as portal and built no floor/ceiling over them. A single
+    /// rectangle comes back unchanged; otherwise rows of the grid are extended greedily (first along Z, then along X).
+    /// </summary>
+    private static List<(int X0, int Z0, int X1, int Z1)> DecomposeIntoRectangles(HashSet<(int X, int Z)> cells)
+    {
+        var result = new List<(int, int, int, int)>();
+        var left = new HashSet<(int X, int Z)>(cells);
+        while (left.Count > 0)
+        {
+            var (sx, sz) = left.OrderBy(c => c.X).ThenBy(c => c.Z).First();
+            int ez = sz;
+            while (left.Contains((sx, ez + 1))) ez++;
+            int ex = sx;
+            while (Enumerable.Range(sz, ez - sz + 1).All(z => left.Contains((ex + 1, z)))) ex++;
+            for (int x = sx; x <= ex; x++)
+                for (int z = sz; z <= ez; z++)
+                    left.Remove((x, z));
+            result.Add((sx, sz, ex, ez));
+        }
+        return result;
+    }
     /// <summary>
     /// Sets SplitDirectionIsXEqualsZ of non-planar floor/ceiling sectors from the diagonal the compiled TR4 mesh really
     /// uses (DOCUMENTATION.md 2.28). The flag was only set when the sector carried a FloorData triangulation function, and

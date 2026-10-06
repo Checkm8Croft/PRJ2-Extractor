@@ -811,6 +811,28 @@ old arithmetic.
 **Result (alexhub2):** ours == TR4 for ceiling quads 344 -> 372 of 378 with no case left where the reference agrees with the TR4 and we do not; ceiling quads
 rendering differently from the reference 33 -> 4; floor quads unchanged (1042 same, 908 == TR4). Tier-label metric unchanged (96.52%). The
 generalization probe of 2.30 still runs on 01-Angkor-Wat and 12-Desert-Railroad with the same wall coverage and no crash.
+### 2.32 -- Portal areas: the bounding-box union made holes in the floor and ceiling
+
+**Cause of the "holes":** `Prj2Exporter` grouped all raw doors with the same (direction, target room) and added ONE portal covering the
+bounding box of their sector areas. When the doors to the same room were not contiguous (several authored portals between the same two rooms,
+common with flooded rooms), the box also covered sectors the TR4 never opened, so TombLib treated them as portal and built no floor/ceiling there.
+PrjProbe (now the portal-area probe) compares which sectors carry a floor/ceiling portal in our export and in the reference.
+Before: floor portal sectors in both 1094, **64 extra** in ours; ceiling 1007 in both, **24 extra**; none missing.
+
+**Fix (`Prj2Exporter.DecomposeIntoRectangles`):** the grouping now collects the SECTOR CELLS of every door and splits that set into disjoint rectangles
+that cover exactly those cells (row-wise greedy, first along Z then along X). A single rectangle comes back unchanged; no portal covers more than
+the union of its doors, and the rectangles of one group cannot overlap each other.
+After: floor portal sectors in both 1094, **0 extra, 0 missing**; ceiling 1007, **0 extra, 0 missing**. The portal rectangles in the cases inspected equal
+the reference's own rectangles. The 88 holes are gone. Tier-label metric and texture coverage are unchanged (96.52%; Floor 1648/1782).
+On 28 original levels the wall coverage and the number of skipped portals are the same, except 03-The-Tomb-of-Seth: 34 -> 46 warning lines, because a group that
+was already skipped as one "Portal overlaps another" (a flipped room overlapping another portal) is now reported once per rectangle; nothing new is lost.
+
+**Textures over portals: why NOT cover them.** What remains "missing" in the floor table is the faces over portals to WATER rooms. The TR4 does
+contain a quad there (double-sided, attribute 2, one of ~16 animated object textures #2234-#2244), but it is the compiler's automatic water surface,
+not an authored face: with the reference's own prj2, normal-over-water floor portals with `Opacity None` have such a compiled quad in 159 sectors and
+with `TraversableFaces` in 146, so the TR4 cannot tell them apart. Setting `PortalOpacity.TraversableFaces` wherever the TR4 draws a quad gave 186
+floor faces textured in ours only (and 200 -> 38 missing), i.e. a floor drawn over portals the reference leaves open. Tried twice (per portal "any drawn", "all
+drawn", "drawn and no hole") and removed. A portal is a legitimate opening; what the player sees there is the water surface, which TombLib creates.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
