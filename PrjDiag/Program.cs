@@ -1,4 +1,4 @@
-using PRJ2_Extractor.Core;
+﻿using PRJ2_Extractor.Core;
 using TombLib.LevelData;
 using TombLib.LevelData.IO;
 using TombLib.LevelData.SectorEnums;
@@ -32,6 +32,29 @@ bool RoomMatches(TombLib.LevelData.Room rr, PRJ2_Extractor.Models.LevelRoom r1) 
     Math.Abs(rr.Position.X * 1024 - r1.X) < 1100 && Math.Abs(rr.Position.Z * 1024 - r1.Z) < 1100 &&
     Math.Abs(rr.Position.Y + r1.YBottom) < 300;
 
+// The position match alone is ambiguous for 40 of 177 rooms (flipped/alternate rooms share a position). Pick the candidate with the same
+// sector footprint whose floor heights fit the exported room best (DOCUMENTATION.md 2.33).
+TombLib.LevelData.Room? BestRef(PRJ2_Extractor.Models.LevelRoom r1, PRJ2_Extractor.Models.PrjRoom pr)
+{
+    var candidates = refRooms.Where(rr => RoomMatches(rr, r1)).ToList();
+    if (candidates.Count < 2) return candidates.FirstOrDefault();
+    double Score(TombLib.LevelData.Room rr)
+    {
+        if (rr.NumXSectors != pr.XSize || rr.NumZSectors != pr.ZSize) return 1e12;
+        double d = 0;
+        for (int x = 0; x < pr.XSize; x++)
+            for (int z = 0; z < pr.ZSize; z++)
+            {
+                var b = pr.Blocks[x * pr.ZSize + z];
+                if (b.Floor == -127) continue;
+                var s = rr.Sectors[x, z];
+                double refAvg = (s.Floor.XnZn + s.Floor.XpZn + s.Floor.XnZp + s.Floor.XpZp) / 4.0 + rr.Position.Y;
+                d += Math.Min(Math.Abs(refAvg - b.Floor * 256.0), 4096);
+            }
+        return d;
+    }
+    return candidates.OrderBy(Score).First();
+}
 // === 1. Ownership-agnostic wall-tier comparison (PRIMARY METRIC) ===
 // Compares presence of a texture at each SEAM (not each sector): does our classification put
 // SOMETHING at this seam's QA/Middle/WS tier (on either side), matching whether the reference has
@@ -50,7 +73,7 @@ for (int i = 0; i < level.Rooms.Length; i++)
 {
     var r1 = level.Rooms[i];
     var pr = prj.Rooms[i];
-    var refRoom = refRooms.FirstOrDefault(rr => RoomMatches(rr, r1));
+    var refRoom = BestRef(r1, pr);
     if (refRoom == null) continue;
 
     // X-seams (between x and x-1)
@@ -107,7 +130,7 @@ foreach (var kv in byTier)
     {
         var r1 = level.Rooms[i];
         var pr = prj.Rooms[i];
-        var refRoom = refRooms.FirstOrDefault(rr => RoomMatches(rr, r1));
+        var refRoom = BestRef(r1, pr);
         if (refRoom == null) continue;
 
         int roomErr = 0, roomTot = 0, slopedErr = 0, flatErr = 0;
@@ -170,7 +193,7 @@ foreach (var kv in byTier)
     {
         var r1 = level.Rooms[i];
         var pr = prj.Rooms[i];
-        var refRoom = refRooms.FirstOrDefault(rr => RoomMatches(rr, r1));
+        var refRoom = BestRef(r1, pr);
         if (refRoom == null) continue;
         bool IsSloped(PRJ2_Extractor.Models.Block b) => b.FloorCorner.Any(c => c != 0) || b.CeilCorner.Any(c => c != 0);
 

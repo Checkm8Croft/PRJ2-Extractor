@@ -833,6 +833,34 @@ not an authored face: with the reference's own prj2, normal-over-water floor por
 with `TraversableFaces` in 146, so the TR4 cannot tell them apart. Setting `PortalOpacity.TraversableFaces` wherever the TR4 draws a quad gave 186
 floor faces textured in ours only (and 200 -> 38 missing), i.e. a floor drawn over portals the reference leaves open. Tried twice (per portal "any drawn", "all
 drawn", "drawn and no hole") and removed. A portal is a legitimate opening; what the player sees there is the water surface, which TombLib creates.
+### 2.33 -- Wrong reference rooms in every comparison, and the second triangle of sloped sectors
+
+**The comparison bug (affects the numbers of 2.7-2.31 that use the reference):** every probe and `PrjDiag` picked the reference room with
+`FirstOrDefault` over a position match (X, Z within 1100, Y within 300). Flipped/alternate rooms share a position: **40 of 177 rooms have 2 or 3
+candidates, and in 20 of them the first candidate is not the room that fits** (same footprint, closest floor heights). Those rooms were compared with
+the wrong twin. `PrjDiag` now uses `BestRef` (same footprint, minimum floor-height difference, per-sector clamp 4096). Effect on the primary metric:
+**96.52% -> 97.01%, FP 845 -> 800, FN 179 -> 87**, 29397 -> 29631 compared seams. The probes that load our prj2 index it by room (`ours[i]` is exactly
+TR4 room i). Percentages in 2.23-2.31 that compared against the reference were measured with the first-candidate rule and may move by a few points; the
+checks against the TR4 itself (2.25, 2.28, 2.30, 2.31's attribution) and the geometry facts do not depend on it.
+
+**What is really missing on floors (correct matching, `PrjProbe`):** the reference textures 2330 floor faces (Floor + Floor_Triangle2) and we texture 2149
+of them (92.2%). 218 gaps remained: 137 flat floors over full portals and 39 over triangular portals, all `TraversableFaces` portals to water rooms (the TR4
+quad there is the engine-made water surface, see 2.32; not recoverable), and **42 faces in non-planar SLOPED sectors where our geometry defines the
+triangle but it had no texture**.
+
+**Cause of the slope gaps:** a non-planar sector is two triangles in TombLib. When the TR4 only compiled ONE of them (the other one touches the ceiling, zero
+height, or was not compiled) there is no texture to copy, and the other face stayed bare although the reference textures it.
+
+**Fix (`Prj2Exporter.FillMissingSplitTriangles`):** both triangles are halves of one texture square, so the bare one is completed from its textured sibling:
+the two shared corners keep the sibling's UV and the remaining corner takes the fourth corner of the sibling's UV right triangle (P + Q - R, R the
+right-angle vertex), mapped through the same stored-TexCoord/vertex relation as 2.27 (reversed for ceilings). Applies to Floor/Floor_Triangle2 and
+Ceiling/Ceiling_Triangle2 when exactly one of the two defined triangular faces is textured.
+Result on the export: `Floor_Triangle2` 486 -> **550** textured faces (reference 548), `Ceiling_Triangle2` 30 -> **38** (reference 38); the 42 bare slope
+faces drop to 5 (triangular portal sectors where the face is defined next to a portal). Tier metric unchanged.
+
+**Honest limit:** this is a continuation, not recovered data. For the 37 completed faces the render probe could compare with the reference, none renders the
+same as the reference (mostly "other" mappings, not a simple mirror): the reference's authors used a different layout on the missing triangle. Visually the
+sector is covered by one continuous texture; it is not the original's choice. There is no TR4 information to do better.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)

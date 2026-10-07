@@ -282,6 +282,7 @@ public static class Prj2Exporter
                 var room = tombRooms[i];
                 if (pr.Id == 1 || room == null) continue;
                 ApplyRoomFaceTextures(room, pr, levelTexture, p.Textures);
+                FillMissingSplitTriangles(room);
             }
         }
 
@@ -289,6 +290,77 @@ public static class Prj2Exporter
         return warnings;
     }
 
+    /// <summary>
+    /// Textures the second triangle of a split floor/ceiling sector when the TR4 only compiled the first one (DOCUMENTATION.md 2.33).
+    /// A non-planar sector is two triangles in TombLib; where one of them touches the ceiling (zero height) or is otherwise not
+    /// compiled, the TR4 has a single triangle and the other face would stay bare. Both triangles are halves of the same texture
+    /// square, so the missing one is completed from its textured sibling: the two shared sector corners keep the sibling's UV and the
+    /// remaining corner takes the fourth corner of the sibling's right-triangle UV box (P + Q - R, R being the right-angle vertex).
+    /// Floors map stored TexCoordJ to vertex Pj; ceilings map it to vertex P(2 - J) (see TryComputeTriangleTexCoords).
+    /// </summary>
+    private static void FillMissingSplitTriangles(Room room)
+    {
+        for (int x = 0; x < room.NumXSectors; x++)
+            for (int z = 0; z < room.NumZSectors; z++)
+            {
+                var sector = room.Sectors[x, z];
+                foreach (var (first, second) in new[] { (SectorFace.Floor, SectorFace.Floor_Triangle2), (SectorFace.Ceiling, SectorFace.Ceiling_Triangle2) })
+                {
+                    bool reversed = first == SectorFace.Ceiling;
+                    if (!room.IsFaceDefined(x, z, first) || !room.IsFaceDefined(x, z, second)) continue;
+                    if (room.GetFaceShape(x, z, first) != FaceShape.Triangle || room.GetFaceShape(x, z, second) != FaceShape.Triangle) continue;
+                    var texA = sector.GetFaceTexture(first);
+                    var texB = sector.GetFaceTexture(second);
+                    SectorFace donor = first, target = second;
+                    if (texA.TextureIsUnavailable == texB.TextureIsUnavailable) continue; // both or neither textured
+                    if (texA.TextureIsUnavailable) { donor = second; target = first; }
+                    var donorTex = sector.GetFaceTexture(donor);
+
+                    if (!room.RoomGeometry.VertexRangeLookup.TryGetValue(new SectorFaceIdentity(x, z, donor), out var rd) || rd.Count != 3) continue;
+                    if (!room.RoomGeometry.VertexRangeLookup.TryGetValue(new SectorFaceIdentity(x, z, target), out var rt) || rt.Count != 3) continue;
+
+                    var stored = new[] { donorTex.TexCoord0, donorTex.TexCoord1, donorTex.TexCoord2 };
+                    var donorUv = new Dictionary<(int, int), Vector2>();
+                    for (int j = 0; j < 3; j++)
+                    {
+                        var p = room.RoomGeometry.VertexPositions[rd.Start + j];
+                        donorUv[((int)Math.Round(p.X), (int)Math.Round(p.Z))] = stored[reversed ? 2 - j : j];
+                    }
+                    if (donorUv.Count != 3) continue;
+
+                    // Right-angle vertex of the donor's UV triangle: shares one coordinate with each of the other two.
+                    var uvs = donorUv.Values.ToArray();
+                    int right = -1;
+                    for (int i = 0; i < 3 && right < 0; i++)
+                    {
+                        var others = Enumerable.Range(0, 3).Where(o => o != i).Select(o => uvs[o]).ToArray();
+                        bool sharesX = others.Any(o => Math.Abs(o.X - uvs[i].X) < 0.5f), sharesY = others.Any(o => Math.Abs(o.Y - uvs[i].Y) < 0.5f);
+                        bool differentOnes = others.Count(o => Math.Abs(o.X - uvs[i].X) < 0.5f) == 1 && others.Count(o => Math.Abs(o.Y - uvs[i].Y) < 0.5f) == 1;
+                        if (sharesX && sharesY && differentOnes) right = i;
+                    }
+                    if (right < 0) continue;
+                    var fourth = uvs[(right + 1) % 3] + uvs[(right + 2) % 3] - uvs[right];
+
+                    var targetUv = new Vector2[3];
+                    bool ok = true;
+                    for (int j = 0; j < 3; j++)
+                    {
+                        var p = room.RoomGeometry.VertexPositions[rt.Start + j];
+                        var key = ((int)Math.Round(p.X), (int)Math.Round(p.Z));
+                        targetUv[reversed ? 2 - j : j] = donorUv.TryGetValue(key, out var shared) ? shared : fourth;
+                        if (!donorUv.ContainsKey(key) && j < 0) ok = false;
+                    }
+                    if (!ok) continue;
+
+                    var filled = donorTex;
+                    filled.TexCoord0 = targetUv[0];
+                    filled.TexCoord1 = targetUv[1];
+                    filled.TexCoord2 = targetUv[2];
+                    filled.TexCoord3 = targetUv[2];
+                    sector.SetFaceTexture(target, filled);
+                }
+            }
+    }
     /// <summary>
     /// Splits a set of sector cells into disjoint rectangles that cover exactly those cells (DOCUMENTATION.md 2.32). The
     /// portal export used to add ONE portal covering the bounding box of all doors to the same room, which also covered
