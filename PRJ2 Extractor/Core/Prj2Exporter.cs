@@ -976,6 +976,64 @@ public static class Prj2Exporter
         return true;
     }
     /// <summary>
+    /// A wall face that TombLib builds as a QUAD but the TR4 holds as a TRIANGLE (two coincident corners because one end of the wall has zero
+    /// height, or one half of a non-planar quad) had no four-corner source for the quad orientation arithmetic, which left rotation 0 (DOCUMENTATION.md 2.34). The four
+    /// corner positions come from RoomGeometry (p1, p2, p0, p3, p0, p2), each is matched in 3D to a vertex of the compiled triangle (two
+    /// coincident corners match the same vertex), its raw UV (>> 8) is classified onto a box corner of the triangle's right-angle UV box, and
+    /// TexCoordK takes the box corner of corner p((K + 3) mod 4), as for floor/ceiling quads. Returns false for anything that does not fit.
+    /// </summary>
+    private static bool TryComputeCollapsedWallQuadTexCoords(Room room, int x, int z, SectorFace face, BlockTex blockTex, Vector2[] box, out Vector2[] texCoords)
+    {
+        texCoords = new Vector2[4];
+        var source = blockTex.SourceFace;
+        var texture = blockTex.SourceTexture;
+        var owner = source?.Owner;
+        if (source == null || texture == null || owner == null || !source.IsTriangle || source.Vertices.Length != 3) return false;
+        if (source.Vertices.Any(v => v >= owner.Vertices.Length)) return false;
+        if (!room.RoomGeometry.VertexRangeLookup.TryGetValue(new SectorFaceIdentity(x, z, face), out var range) || range.Count != 6) return false;
+
+        var raw = source.Vertices.Select(v => owner.Vertices[v]).ToArray();
+        int[] slots = { 2, 0, 1, 3 }; // vertex slots of p0, p1, p2, p3
+        var match = new int[4];
+        for (int j = 0; j < 4; j++)
+        {
+            var p = room.RoomGeometry.VertexPositions[range.Start + slots[j]];
+            int found = -1;
+            for (int i = 0; i < 3; i++)
+            {
+                if (Math.Abs(raw[i].X - p.X) > 8 || Math.Abs(raw[i].Z - p.Z) > 8) continue;
+                if (Math.Abs(-raw[i].Y - (p.Y + room.Position.Y)) > 16) continue;
+                if (found >= 0) return false;
+                found = i;
+            }
+            match[j] = found; // -1: corner is not a vertex of this triangle
+        }
+        // Two shapes fit: a COLLAPSED quad (every corner matched, one triangle vertex used twice), or one half of a non-planar wall quad (three corners
+        // matched, the fourth takes the unused corner of the texture box, as in FillMissingSplitTriangles).
+        int unmatched = match.Count(m => m < 0);
+        if (match.Where(m => m >= 0).Distinct().Count() != 3 || unmatched > 1) return false;
+
+        var uvs = Enumerable.Range(0, 3).Select(i => (U: texture.Vertices[i].X >> 8, V: texture.Vertices[i].Y >> 8)).ToArray();
+        int minU = uvs.Min(c => c.U), maxU = uvs.Max(c => c.U), minV = uvs.Min(c => c.V), maxV = uvs.Max(c => c.V);
+        if (minU == maxU || minV == maxV) return false;
+        var corner = new int[3];
+        for (int i = 0; i < 3; i++)
+        {
+            bool atMaxU = Math.Abs(uvs[i].U - maxU) < Math.Abs(uvs[i].U - minU);
+            bool atMaxV = Math.Abs(uvs[i].V - maxV) < Math.Abs(uvs[i].V - minV);
+            corner[i] = (atMaxU, atMaxV) switch { (false, false) => 0, (true, false) => 1, (true, true) => 2, (false, true) => 3 };
+        }
+        if (corner.Distinct().Count() != 3) return false;
+
+        int unusedCorner = Enumerable.Range(0, 4).First(c => !corner.Contains(c));
+        for (int k = 0; k < 4; k++)
+        {
+            int m = match[(k + 3) % 4];
+            texCoords[k] = box[m < 0 ? unusedCorner : corner[m]];
+        }
+        return true;
+    }
+    /// <summary>
     /// Derives the rotation and mirror a wall QUAD needs so that each of TombLib's four face corners shows the
     /// same texture corner as the compiled TR4 face does (DOCUMENTATION.md 2.26). TombLib builds a wall quad as
     /// P0 = top at the wall's start, P1 = top at its end, P2 = bottom at its end, P3 = bottom at its start, and the
@@ -1105,6 +1163,17 @@ public static class Prj2Exporter
         {
             (uv[0], uv[1]) = (uv[1], uv[0]);
             (uv[2], uv[3]) = (uv[3], uv[2]);
+        }
+
+        if (face.ToString().StartsWith("Wall_") && room.GetFaceShape(x, z, face) != FaceShape.Triangle && blockTex.SourceFace is { IsTriangle: true }
+            && TryComputeCollapsedWallQuadTexCoords(room, x, z, face, blockTex, boxUv, out var collapsedUv))
+        {
+            texture.TexCoord0 = collapsedUv[0];
+            texture.TexCoord1 = collapsedUv[1];
+            texture.TexCoord2 = collapsedUv[2];
+            texture.TexCoord3 = collapsedUv[3];
+            sector.SetFaceTexture(face, texture);
+            return;
         }
 
         if ((face == SectorFace.Floor || face == SectorFace.Ceiling) && room.GetFaceShape(x, z, face) != FaceShape.Triangle

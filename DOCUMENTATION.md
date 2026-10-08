@@ -861,6 +861,28 @@ faces drop to 5 (triangular portal sectors where the face is defined next to a p
 **Honest limit:** this is a continuation, not recovered data. For the 37 completed faces the render probe could compare with the reference, none renders the
 same as the reference (mostly "other" mappings, not a simple mirror): the reference's authors used a different layout on the missing triangle. Visually the
 sector is covered by one continuous texture; it is not the original's choice. There is no TR4 information to do better.
+### 2.34 -- Wall orientation leftovers, re-measured with the correct reference rooms
+
+**Re-measure (wall UV check with `BestRef`-style matching, 2.33):** 2346 wall faces textured in both our export and the reference, **1148 exact (48.9%)**;
+only **20** more cover the same UV region with the corners in a different order (11 quads and 4 + 5 triangles); the other ~1180 are different regions (halves of
+split faces, tier labels), analysed in 2.23/2.24. The 2.26 figures (1170 of 2378) came from the first-candidate room matching.
+
+**Who is at fault, for each of the 20 (a debug record of the path that built every texture):** 11 were built by the DIRECT method
+(`quad-direct`), so they equal what the TR4 shows and the reference differs from the TR4 (authoring or compile quirk, nothing to fix); 9 were built by the
+OLD decode because a direct attempt failed.
+
+**What the 141 fallback wall faces were:** 185 wall faces (before this change) were TombLib QUADS whose TR4 source is a TRIANGLE: a collapsed
+quad (one end of the wall has zero height, two corners coincide) or one half of a non-planar wall quad (the other half is a second compiled triangle).
+`TryComputeWallQuadOrientation` needs a four-corner source and left rotation 0.
+**Fix (`Prj2Exporter.TryComputeCollapsedWallQuadTexCoords`):** match the four geometry corners (p1, p2, p0, p3, p0, p2) in 3D to the triangle's three vertices; a
+collapsed quad matches every corner (one vertex twice), a half quad leaves one corner unmatched, which takes the unused corner of the texture box.
+TexCoordK belongs to corner p((K + 3) mod 4) as for floor/ceiling quads.
+Result: 93 wall faces now take this path (before: rotation 0); the comparison with the reference moves by one face (21 -> 20), because most of these already agreed
+with it by luck of rotation 0 or differ for the authoring reason above. 141 wall faces still use the old decode, of which 9 are compared with the reference and differ
+(wall triangles whose vertex does not match, and collapsed quads with two unmatched corners).
+
+**Conclusion for orientation:** about 99% of compared wall faces now have the same UV region and corner order as the reference or differ only where the TR4 itself
+disagrees with the reference. Nothing worth chasing is left here.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
