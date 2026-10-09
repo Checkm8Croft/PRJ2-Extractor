@@ -883,6 +883,41 @@ with it by luck of rotation 0 or differ for the authoring reason above. 141 wall
 
 **Conclusion for orientation:** about 99% of compared wall faces now have the same UV region and corner order as the reference or differ only where the TR4 itself
 disagrees with the reference. Nothing worth chasing is left here.
+### 2.35 -- Re-measurement of 2.20-2.32 with the correct rooms
+
+Two matching defects were behind many figures: (a) the reference room was the first position match (2.33), and (b) the probes that compare OUR export with the
+TR4 itself also located our room by position, so with twin rooms or null slots they could pick or skip the wrong one (the 28 "unmatched rooms" of
+alexhub2). Our room `i` is exactly TR4 room `i`. Every probe below was re-run on the current code with `ours[i]` and the best-fitting reference room.
+Old figures are the ones written in the section named; "now" mixes the correction with the code changes made since (portal decomposition 2.32, slope fill 2.33,
+collapsed wall quads 2.34), which is why a few moved more than the matching alone would explain.
+
+| section | quantity | written then | now |
+|---|---|---|---|
+| 2.20 / 2.31 | floor quads rendering like the reference | 1042 of 1042 | **1094 of 1094** |
+| 2.31 | ceiling quads == TR4 and == reference | 372 of 378 (6 "both differ") | **456 of 456** |
+| 2.31 | floor quads == TR4 | 908 of 916 (8 "both differ") | **1094 of 1094** |
+| 2.27 | ceiling quads that render differently from the reference | 4 | 7 |
+| 2.27 | floor triangle / Floor_Triangle2 rendering like the reference (same vertex set) | 123 / 48 and 48 / 112 | 134 / 50 and 49 / 130 |
+| 2.27 | ceiling triangle / Ceiling_Triangle2 | 15 / 1 and 1 / 12 | 23 / 15 and 3 / 32 |
+| 2.22 / 2.24 | seams with 3 quads and a straight edge: reference WF/WC equal the quad boundaries | 235 of 248 (94.8%) | **244 of 249 (98.0%)** |
+| 2.22 | single-quad seams whose edge matches WF/WC | 334 of 374 (89.3%) | 355 of 392 (90.6%) |
+| 2.22 | two-quad seams where the reference has ONE face | 377 of 456 (82.7%) | 406 of 483 (84.1%) |
+| 2.23 / 2.24 | compiled wall quads (capped 3 per seam) with a defined face | 2754 of 3057 (90.1%), 28 rooms skipped | **3260 of 3493 (93.3%)**, all rooms; textured 3256 |
+| 2.25 | wall seams with a HOLE / face beyond the TR4 stack / no face | 31 / 82 / 27 | 21 / 86 / 18 |
+| 2.28 | floor sectors with two compiled triangles, ours == TR4 | 414, 0 differ | **475, 0 differ** |
+| 2.28 | ceiling sectors with two compiled triangles, ours == TR4 | 30 after the fix (17 before) | **35, 0 differ** |
+| 2.28 | floor sectors with 2 triangles in the TR4 and 1 in ours (triangular portal) | 39 | 39 |
+| 2.30 | wall quads with a defined, textured face, 28 levels | 77.6% to 98.2%, about 92% | **86.7% to 97.9%, median 94.9%** |
+| 2.30 | two-triangle sectors differing from the TR4, 28 levels | 10 of about 6000 | **0 of 6835** |
+| 2.30 | 12-Desert-Railroad wall coverage | 77.6% | 91.3% |
+| 2.32 | floor / ceiling portal sectors in both, extra, missing | 1094 / 1007, 0, 0 | 1058 / 1058, **0, 0** |
+
+**What changed in meaning:** the "unexplained" quads of 2.31 (6 ceiling, 8 floor that differed from both the TR4 and the reference) were an artifact of comparing against the
+wrong room, not symmetric UV boxes: with the right rooms every single-sector floor and ceiling quad agrees with the TR4 and the reference. The synthesis of hidden wall
+heights (2.24) is better supported than first measured (98% on three-quad seams). The Desert-Railroad weakness was mostly a matching and portal artifact (77.6% -> 91.3%).
+**What did not change:** the portal conclusions of 2.32 and 2.33, the 39 triangular-portal sectors, the 137 + 39 water-portal floor faces, and the
+flipU disagreement between the TR4 and the reference on floor/ceiling triangles (2.27), which still has the same shape (about 0.4 of the compared triangles).
+PrjProbe is now the wall-height oracle of 2.22 (it was never committed before).
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
