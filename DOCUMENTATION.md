@@ -918,6 +918,27 @@ heights (2.24) is better supported than first measured (98% on three-quad seams)
 **What did not change:** the portal conclusions of 2.32 and 2.33, the 39 triangular-portal sectors, the 137 + 39 water-portal floor faces, and the
 flipU disagreement between the TR4 and the reference on floor/ceiling triangles (2.27), which still has the same shape (about 0.4 of the compared triangles).
 PrjProbe is now the wall-height oracle of 2.22 (it was never committed before).
+### 2.36 -- Portal opacity (None / SolidFaces / TraversableFaces): what the TR4 can and cannot tell
+
+**TombLib semantics (PortalInstance, Room.GetFloorRoomConnectionInfo, Compilers/Rooms.cs):** `HasTexturedFaces = Opacity != None`, `IsTraversable = Opacity != SolidFaces`.
+- `None`: the TR4 has the door AND the FloorData portal function, and no face over the opening.
+- `TraversableFaces` ("opacity 2"): door and FloorData portal stay, and the faces are drawn.
+- `SolidFaces` ("opacity 1"): the faces are drawn but the portal is not traversable, so it leaves NO door and NO FloorData portal in the TR4: nothing is left from which to rebuild its area or its target room.
+alexhub2's reference contains no SolidFaces portal (its 73 floor/ceiling portals are 60 None and 14 TraversableFaces; the loader maps the byte directly).
+
+**Evidence per reference portal (PrjProbe, now the portal-opacity probe; room twin chosen by geometry and by which faces carry a texture, same result as geometry alone):**
+floor portals the TR4 draws on EVERY sector: reference `TraversableFaces` 12, reference `None` 20 (13 of them over water rooms, 7 between normal rooms); the other 40 `None`
+floor portals have no or partial faces. Ceiling portals: 62 `None` with no faces, 10 `None` with partial ones, 1 `TraversableFaces`.
+In the reference, Traversable portals have a real texture on ALL their sectors and None portals never do (46 none, 14 some), but that is the authored data, which our
+export does not have.
+The TR4 quads over `None` portals to water rooms are double-sided, attribute 2, animated textures #2234-#2245: the same kind of quad that Traversable portals show, so the
+TR4 does not separate the two. Counting horizontal face "layers" per sector (a quad, or a pair of triangles, is one layer) does not separate them either: every drawn
+Traversable portal and the 13 drawn water `None` portals have exactly one layer per sector. Using "TR4 draws every sector" as the rule would be right for 12 portals and wrong
+for 20 (precision 37.5%); restricted to water-adjacent portals it is 12 against 13, a coin flip.
+
+**Consequence:** nothing in the TR4 identifies Traversable portals reliably, and Solid ones leave no trace. `Prj2Exporter` therefore keeps `PortalOpacity.None` for every
+portal (the rejected experiments of 2.32 confirmed that guessing adds floor over openings the reference leaves open). A faithful opacity needs information the TR4 does
+not contain, so it has to come from the author (an override list per portal) rather than from inference.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
