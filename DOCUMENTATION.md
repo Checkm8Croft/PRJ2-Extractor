@@ -938,7 +938,13 @@ for 20 (precision 37.5%); restricted to water-adjacent portals it is 12 against 
 
 **Consequence:** nothing in the TR4 identifies Traversable portals reliably, and Solid ones leave no trace. `Prj2Exporter` therefore keeps `PortalOpacity.None` for every
 portal (the rejected experiments of 2.32 confirmed that guessing adds floor over openings the reference leaves open). A faithful opacity needs information the TR4 does
-not contain, so it has to come from the author (an override list per portal) rather than from inference.
+not contain, so it has to come from the author (an override list per portal) rather than from inference.**Author override (implemented, `Prj2Exporter.ApplyPortalOpacityOverrides`):** every export writes `NAME.portals.template.txt` next to the .prj2 with one line per
+floor/ceiling portal, e.g. `room=22 dir=Floor area=6,5-7,5 opacity=None   # 2 sector(s), target is a water room` (146 lines on alexhub2). If `NAME.portals.txt` exists it is read
+before the geometry is built; each line `room=N dir=Floor|Ceiling area=x0,z0-x1,z1 opacity=None|Solid|Traversable` finds the portal of that room by direction and exact area and sets its
+`Opacity`. Unknown opacity, a line that does not parse or a portal that does not exist is reported as an export warning; with no override file nothing changes (all portals stay None).
+Test on alexhub2: `room=22 dir=Floor area=6,5-7,5 opacity=Traversable` turns that portal into `TraversableFaces` and its two floor faces become defined (they were not under
+`None`); the other four portals of the room stay `None`. The test override file was removed afterwards.
+
 ---
 
 ## Key structural lessons (apply to future work on this codebase)
