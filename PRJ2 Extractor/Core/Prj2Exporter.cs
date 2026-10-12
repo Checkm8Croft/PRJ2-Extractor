@@ -262,8 +262,6 @@ public static class Prj2Exporter
             }
         }
 
-        ApplyPortalOpacityOverrides(tombRooms, prj2FilePath, warnings);
-
         ExportSoundSources(trLevel, tombRooms, warnings);
         ExportSinks(trLevel, tombRooms, warnings);
         ExportCameras(trLevel, tombRooms, warnings);
@@ -363,85 +361,6 @@ public static class Prj2Exporter
                 }
             }
     }
-    /// <summary>
-    /// Portal opacity (None / SolidFaces / TraversableFaces) is not recoverable from the TR4 (DOCUMENTATION.md 2.36): a Solid portal leaves no
-    /// door at all, and a Traversable one is indistinguishable from a None portal over a water room (both show the engine's water surface). So the
-    /// exporter keeps None everywhere and lets the author decide, with a plain-text file next to the .prj2:
-    /// <c>NAME.portals.template.txt</c> is rewritten on every export and lists every floor/ceiling portal with its current opacity; copy it to
-    /// <c>NAME.portals.txt</c>, change <c>opacity=</c> (None | Solid | Traversable) on the lines that should differ and export again. Lines of the form
-    /// <c>room=22 dir=Floor area=6,5-7,5 opacity=Traversable</c> are matched to a portal of that room by direction and exact area; '#' starts a comment.
-    /// An override whose portal does not exist is reported as a warning. A Solid portal is not traversable, so TombLib compiles it without FloorData
-    /// portal, which is what the editor's "opacity 1" means.
-    /// </summary>
-    private static void ApplyPortalOpacityOverrides(Room?[] tombRooms, string prj2FilePath, List<string> warnings)
-    {
-        string baseName = Path.Combine(Path.GetDirectoryName(prj2FilePath) ?? ".", Path.GetFileNameWithoutExtension(prj2FilePath));
-        string overridePath = baseName + ".portals.txt", templatePath = baseName + ".portals.template.txt";
-
-        try
-        {
-            var lines = new List<string>
-            {
-                "# Floor/ceiling portals of this export. Copy this file to " + Path.GetFileName(overridePath) + ", edit opacity= (None | Solid | Traversable), export again.",
-                "# None = open portal, no faces. Solid = textured faces, not traversable. Traversable = textured faces, traversable."
-            };
-            for (int i = 0; i < tombRooms.Length; i++)
-            {
-                var room = tombRooms[i];
-                if (room == null) continue;
-                foreach (var portal in room.Portals.Where(p => p.Direction == PortalDirection.Floor || p.Direction == PortalDirection.Ceiling).OrderBy(p => p.Direction).ThenBy(p => p.Area.X0).ThenBy(p => p.Area.Y0))
-                {
-                    int sectors = (portal.Area.X1 - portal.Area.X0 + 1) * (portal.Area.Y1 - portal.Area.Y0 + 1);
-                    string water = portal.AdjoiningRoom == null ? "" : portal.AdjoiningRoom.Properties.Type == RoomType.Water ? ", target is a water room" : "";
-                    lines.Add($"room={i} dir={portal.Direction} area={portal.Area.X0},{portal.Area.Y0}-{portal.Area.X1},{portal.Area.Y1} opacity={ShortOpacity(portal.Opacity)}   # {sectors} sector(s){water}");
-                }
-            }
-            File.WriteAllLines(templatePath, lines);
-        }
-        catch (Exception ex)
-        {
-            warnings.Add($"Could not write the portal opacity template '{templatePath}': {ex.Message}");
-        }
-
-        if (!File.Exists(overridePath)) return;
-
-        var pattern = new System.Text.RegularExpressions.Regex(@"^\s*room=(\d+)\s+dir=(Floor|Ceiling)\s+area=(\d+),(\d+)-(\d+),(\d+)\s+opacity=(\w+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        int applied = 0;
-        foreach (var raw in File.ReadAllLines(overridePath))
-        {
-            string line = raw.Split('#')[0].Trim();
-            if (line.Length == 0) continue;
-            var m = pattern.Match(line);
-            if (!m.Success) { warnings.Add($"Portal opacity file: line not understood: '{raw.Trim()}'"); continue; }
-
-            int roomIndex = int.Parse(m.Groups[1].Value);
-            var direction = Enum.Parse<PortalDirection>(m.Groups[2].Value, true);
-            int x0 = int.Parse(m.Groups[3].Value), z0 = int.Parse(m.Groups[4].Value), x1 = int.Parse(m.Groups[5].Value), z1 = int.Parse(m.Groups[6].Value);
-            PortalOpacity? opacity = m.Groups[7].Value.ToLowerInvariant() switch
-            {
-                "none" or "normal" => PortalOpacity.None,
-                "solid" or "solidfaces" => PortalOpacity.SolidFaces,
-                "traversable" or "traversablefaces" => PortalOpacity.TraversableFaces,
-                _ => null
-            };
-            if (opacity == null) { warnings.Add($"Portal opacity file: unknown opacity '{m.Groups[7].Value}' in '{raw.Trim()}'"); continue; }
-
-            var portal = roomIndex >= 0 && roomIndex < tombRooms.Length
-                ? tombRooms[roomIndex]?.Portals.FirstOrDefault(p => p.Direction == direction && p.Area.X0 == x0 && p.Area.Y0 == z0 && p.Area.X1 == x1 && p.Area.Y1 == z1)
-                : null;
-            if (portal == null) { warnings.Add($"Portal opacity file: no {direction} portal with area ({x0},{z0})-({x1},{z1}) in room {roomIndex}"); continue; }
-            portal.Opacity = opacity.Value;
-            applied++;
-        }
-        warnings.Add($"Portal opacity: {applied} override(s) applied from '{Path.GetFileName(overridePath)}'.");
-    }
-
-    private static string ShortOpacity(PortalOpacity opacity) => opacity switch
-    {
-        PortalOpacity.SolidFaces => "Solid",
-        PortalOpacity.TraversableFaces => "Traversable",
-        _ => "None"
-    };
     /// <summary>
     /// Splits a set of sector cells into disjoint rectangles that cover exactly those cells (DOCUMENTATION.md 2.32). The
     /// portal export used to add ONE portal covering the bounding box of all doors to the same room, which also covered
