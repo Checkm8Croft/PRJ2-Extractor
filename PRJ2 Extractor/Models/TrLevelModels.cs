@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace PRJ2_Extractor.Models;
 
@@ -52,6 +52,7 @@ public class RoomFace
     public ushort[] Vertices = [];
     public ushort Texture;
     public bool IsTriangle;
+    public LevelRoom? Owner; // set in TrLevel.ConvertToPrj; lets BlockTex consumers resolve Vertices
 }
 
 public class TextureVertex

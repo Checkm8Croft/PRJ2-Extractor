@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Windows;
@@ -180,7 +180,16 @@ public class TrLevel : IDisposable
             using (var zlib = new ZLibStream(geometry1, CompressionMode.Decompress))
                 zlib.CopyTo(tex32);
             tex32.Position = 0;
-            int totalHeight = NumRoomTextiles * 256;
+            // Atlas layout MUST mirror the unified tile numbering that ObjectTexture.TileAndFlag
+            // indexes into: room tiles first (0..NumRoomTextiles-1), then object tiles
+            // (NumRoomTextiles..NumRoomTextiles+NumObjTextiles-1), then bump tiles. Object tiles
+            // were previously skipped entirely (never read into TextureBitmap at all), which is
+            // wrong: room-geometry faces can and do legitimately reference tiles in the object-tile
+            // range (verified: alexhub2 has room faces using tiles up to index 12 against only 4
+            // room tiles) -- skipping them left ToPrjTexInfo's Y = tile*256+minY pointing at missing
+            // or (once bump tiles were appended) wrong image data, which is what Tomb Editor was
+            // reporting as "TEXTURE OUT OF BOUNDS" / garbled textures.
+            int totalHeight = (NumRoomTextiles + NumObjTextiles) * 256;
             if (NumBumpTextiles > 0)
                 totalHeight += (NumBumpTextiles / 2) * 256;
 
@@ -188,7 +197,8 @@ public class TrLevel : IDisposable
             using (var br3 = new BinaryReader(tex32, Encoding.UTF8, leaveOpen: true))
             {
                 int offset = 0;
-                for (int i = 0; i < NumRoomTextiles * 256; i++)
+                int roomAndObjRows = (NumRoomTextiles + NumObjTextiles) * 256;
+                for (int i = 0; i < roomAndObjRows; i++)
                 {
                     if (i % (256 * 2) == 0) progress?.Report(Math.Min(99, (int)(memfile.Position * 100 / fileSize) + 1));
                     for (int j = 0; j < 256; j++)
@@ -202,8 +212,7 @@ public class TrLevel : IDisposable
                 }
                 if (NumBumpTextiles > 0)
                 {
-                    tex32.Seek(NumObjTextiles * 256 * 256 * 4, SeekOrigin.Current);
-                    for (int i = NumRoomTextiles * 256; i < totalHeight; i++)
+                    for (int i = roomAndObjRows; i < totalHeight; i++)
                     {
                         if (i % (256 * 2) == 0) progress?.Report(Math.Min(99, (int)(memfile.Position * 100 / fileSize) + 1));
                         for (int j = 0; j < 256; j++)
@@ -475,7 +484,9 @@ public class TrLevel : IDisposable
             using (var zlib = new ZLibStream(geometry1, CompressionMode.Decompress))
                 zlib.CopyTo(tex32);
             tex32.Position = 0;
-            int totalHeight = NumRoomTextiles * 256;
+            // Same fix as the TR4 loader above: atlas must include object tiles (not skip them) so
+            // it mirrors the unified tile numbering ObjectTexture.TileAndFlag indexes into.
+            int totalHeight = (NumRoomTextiles + NumObjTextiles) * 256;
             if (NumBumpTextiles > 0)
                 totalHeight += (NumBumpTextiles / 2) * 256;
 
@@ -483,7 +494,8 @@ public class TrLevel : IDisposable
             using (var br3 = new BinaryReader(tex32, Encoding.UTF8, leaveOpen: true))
             {
                 int offset = 0;
-                for (int i = 0; i < NumRoomTextiles * 256; i++)
+                int roomAndObjRows = (NumRoomTextiles + NumObjTextiles) * 256;
+                for (int i = 0; i < roomAndObjRows; i++)
                 {
                     for (int j = 0; j < 256; j++)
                     {
@@ -496,8 +508,7 @@ public class TrLevel : IDisposable
                 }
                 if (NumBumpTextiles > 0)
                 {
-                    tex32.Seek(NumObjTextiles * 256 * 256 * 4, SeekOrigin.Current);
-                    for (int i = NumRoomTextiles * 256; i < totalHeight; i++)
+                    for (int i = roomAndObjRows; i < totalHeight; i++)
                     {
                         for (int j = 0; j < 256; j++)
                         {
@@ -1089,10 +1100,23 @@ public class TrLevel : IDisposable
         uint slots = NumRooms <= 100 ? 100 : NumRooms <= 200 ? 200u : 300u;
         var p = new TrProject(NumRooms, slots);
 
-        if (saveTga && TextureBitmap != null && TextureBitmap.PixelWidth > 0)
+        foreach (var lr in Rooms)
+            foreach (var rf in lr.Rectangles.Concat(lr.Triangles))
+                rf.Owner = lr;
+
+        // Room-face texture usage determines the exported atlas: TextureBitmap (as read in Load())
+        // mirrors ObjectTexture.TileAndFlag's unified room+object+bump tile numbering, but most of
+        // that space is texture data used exclusively by WAD moveables/statics, which has no place
+        // in the level's own room-texture file. Room faces do occasionally reference tiles that
+        // would otherwise look "object-only" though (verified on real data), so we can't just keep
+        // the room-tile range -- BuildRoomTextureAtlas scans actual room-face usage and keeps
+        // exactly those tiles, compacted and remapped to a dense 0..N-1 sequence.
+        var (roomAtlas, tileRemap) = BuildRoomTextureAtlas();
+
+        if (saveTga && roomAtlas.PixelWidth > 0)
         {
             var tgaPath = Path.ChangeExtension(filename, ".tga");
-            TgaWriter.Save(TextureBitmap, tgaPath);
+            TgaWriter.Save(roomAtlas, tgaPath);
             var shortPath = Path.GetFileName(tgaPath);
             p.TgaFilePath = shortPath + " ";
         }
@@ -1126,6 +1150,46 @@ public class TrLevel : IDisposable
             p.Rooms[i].YTop = -r1.YTop / 256;
             p.Rooms[i].Blocks = new Block[r1.NumZ * r1.NumX];
 
+            // Which outer-ring sectors have a real portal (a connection to another room) touching
+            // them, so the border-wall-flattening rule below doesn't discard real Floor/Ceiling/
+            // FloorData for them just because their index happens to be 0 or NumX-1/NumZ-1. Verified
+            // against a concrete case: room 3's sector (0,3) sits in column x=0 (the outer ring) but
+            // has a genuine wall portal to room 6 on its own row -- it was being flattened to
+            // BorderWall (Id=0x1E, Floor=YBottom, Ceiling=YTop) despite carrying real walkable floor
+            // data, which a TombIO cross-check independently confirmed as a systematic per-sector
+            // height mismatch concentrated in exactly this kind of room.
+            var portalTouchedSectors = new HashSet<(int x, int z)>();
+            foreach (var po in r1.Portals)
+            {
+                int minX = po.Vertices.Min(v => (int)v.X), maxX = po.Vertices.Max(v => (int)v.X);
+                int minZ = po.Vertices.Min(v => (int)v.Z), maxZ = po.Vertices.Max(v => (int)v.Z);
+                if (po.Normal.X != 0)
+                {
+                    // Wall portal on a constant-X plane: vertices sit on (or one unit short of) a
+                    // single sector-grid line -- round to find it, then mark the sectors on both
+                    // sides of that line for every Z sector the portal spans.
+                    int gridX = (int)Math.Round(po.Vertices.Average(v => (double)v.X) / 1024.0);
+                    int zLo = minZ / 1024, zHi = (maxZ - 1) / 1024;
+                    for (int z = zLo; z <= zHi; z++) { portalTouchedSectors.Add((gridX - 1, z)); portalTouchedSectors.Add((gridX, z)); }
+                }
+                else if (po.Normal.Z != 0)
+                {
+                    int gridZ = (int)Math.Round(po.Vertices.Average(v => (double)v.Z) / 1024.0);
+                    int xLo = minX / 1024, xHi = (maxX - 1) / 1024;
+                    for (int x = xLo; x <= xHi; x++) { portalTouchedSectors.Add((x, gridZ - 1)); portalTouchedSectors.Add((x, gridZ)); }
+                }
+                else
+                {
+                    // Horizontal (floor/ceiling) portal: its footprint IS the exact sector range,
+                    // no halo needed.
+                    int xLo = minX / 1024, xHi = (maxX - 1) / 1024;
+                    int zLo = minZ / 1024, zHi = (maxZ - 1) / 1024;
+                    for (int x = xLo; x <= xHi; x++)
+                    for (int z = zLo; z <= zHi; z++)
+                        portalTouchedSectors.Add((x, z));
+                }
+            }
+
             // Sectors[] are stored in the file in X-major order (idx = X_idx*NumZ + Z_idx,
             // per TRosettaStone). j = X_idx, k = Z_idx here to read them back correctly.
             for (int j = 0; j < r1.NumX; j++)
@@ -1153,13 +1217,19 @@ public class TrLevel : IDisposable
                 if ((k == 0 && j == 0) || (k == r1.NumZ - 1 && j == 0) ||
                     (k == 0 && j == r1.NumX - 1) || (k == r1.NumZ - 1 && j == r1.NumX - 1))
                 {
-                    block.Id = 0x1E; block.Floor = 0; block.Ceiling = 20;
+                    if (!portalTouchedSectors.Contains((j, k)))
+                    {
+                        block.Id = 0x1E; block.Floor = 0; block.Ceiling = 20;
+                    }
                 }
                 else if (j == 0 || j == r1.NumX - 1 || k == 0 || k == r1.NumZ - 1)
                 {
-                    block.Id = 0x1E;
-                    block.Floor = (short)(-r1.YBottom / 256);
-                    block.Ceiling = (short)(-r1.YTop / 256);
+                    if (!portalTouchedSectors.Contains((j, k)))
+                    {
+                        block.Id = 0x1E;
+                        block.Floor = (short)(-r1.YBottom / 256);
+                        block.Ceiling = (short)(-r1.YTop / 256);
+                    }
                 }
                 else if (sector.Floor == -127)
                 {
@@ -1219,29 +1289,103 @@ public class TrLevel : IDisposable
                 }
             }
 
-            ApplyRoomMeshTextures(p.Rooms[i], r1, ObjectTextures.Length);
+            ApplyRoomMeshTextures(p.Rooms[i], r1, ObjectTextures);
         }
 
-        BuildPrjTextureTable(p);
+        BuildPrjTextureTable(p, tileRemap);
         return p;
     }
 
-    private void BuildPrjTextureTable(TrProject p)
+    /// <summary>
+    /// Builds a compacted room-only texture atlas: scans every room face's texture usage, collects
+    /// the set of original (room+object+bump-numbered) tiles actually referenced, and copies just
+    /// those 256x256 blocks -- in original pixel content, but sequential dense order -- out of the
+    /// full TextureBitmap (which still holds every tile, room and object and bump alike, as read by
+    /// Load()). Returns the new compact bitmap plus the original-tile -> new-index remap that
+    /// ToPrjTexInfo needs to compute correct Y offsets against it.
+    /// </summary>
+    private (WriteableBitmap atlas, Dictionary<int, int> tileRemap) BuildRoomTextureAtlas()
     {
-        int count = Math.Min(ObjectTextures.Length, 1024);
+        // NOTE: an earlier version of this code excluded tiles >= NumRoomTextiles+NumObjTextiles,
+        // on the theory that they were bump-map data (not plain diffuse colour). Direct visual
+        // inspection of that raw pixel region disproved this: it contains ordinary, well-formed
+        // room textures (brick, wood, roof tiles, decorative reliefs), not bump/normal data. All
+        // referenced tiles are kept regardless of index range.
+        var usedTiles = new SortedSet<int>();
+        foreach (var room in Rooms)
+        {
+            foreach (var f in room.Rectangles)
+            {
+                int ti = f.Texture & 0x7FFF;
+                if (ti >= 0 && ti < ObjectTextures.Length)
+                    usedTiles.Add(ObjectTextures[ti].TileAndFlag & 0x7FFF);
+            }
+            foreach (var f in room.Triangles)
+            {
+                int ti = f.Texture & 0x7FFF;
+                if (ti >= 0 && ti < ObjectTextures.Length)
+                    usedTiles.Add(ObjectTextures[ti].TileAndFlag & 0x7FFF);
+            }
+        }
+
+        var tileList = usedTiles.ToList();
+        var remap = new Dictionary<int, int>(tileList.Count);
+        for (int i = 0; i < tileList.Count; i++) remap[tileList[i]] = i;
+
+        if (TextureBitmap == null || tileList.Count == 0)
+            return (TextureBitmap ?? new WriteableBitmap(256, 256, 96, 96, PixelFormats.Bgr24, null), remap);
+
+        int newHeight = tileList.Count * 256;
+        var newBmp = new WriteableBitmap(256, newHeight, 96, 96, PixelFormats.Bgr24, null);
+        int srcStride = TextureBitmap.PixelWidth * 3;
+        var rowBuf = new byte[srcStride * 256];
+
+        for (int i = 0; i < tileList.Count; i++)
+        {
+            int srcY = tileList[i] * 256;
+            if (srcY < 0 || srcY + 256 > TextureBitmap.PixelHeight) continue; // guard malformed data
+            TextureBitmap.CopyPixels(new Int32Rect(0, srcY, 256, 256), rowBuf, srcStride, 0);
+            newBmp.WritePixels(new Int32Rect(0, i * 256, 256, 256), rowBuf, srcStride, 0);
+        }
+
+        return (newBmp, remap);
+    }
+
+    private void BuildPrjTextureTable(TrProject p, Dictionary<int, int> tileRemap)
+    {
+        // No 1024 cap: see the BlockTex.Index field comment -- this project does not round-trip
+        // through the classic-PRJ on-disk 10-bit texture-index format, so its 1024-entry ceiling
+        // does not apply here.
+        int count = ObjectTextures.Length;
         p.NumTextures = (uint)count;
         p.Textures = new TexInfo[count];
         for (int i = 0; i < count; i++)
-            p.Textures[i] = ToPrjTexInfo(ObjectTextures[i]);
+            p.Textures[i] = ToPrjTexInfo(ObjectTextures[i], tileRemap);
     }
 
-    private static TexInfo ToPrjTexInfo(ObjectTexture texture)
+    private static TexInfo ToPrjTexInfo(ObjectTexture texture, Dictionary<int, int> tileRemap)
     {
         int tile = texture.TileAndFlag & 0x7FFF;
-        int minX = texture.Vertices.Min(v => v.X >> 8);
-        int maxX = texture.Vertices.Max(v => v.X >> 8);
-        int minY = texture.Vertices.Min(v => v.Y >> 8);
-        int maxY = texture.Vertices.Max(v => v.Y >> 8);
+        // Tiles never used by any room face (WAD-mesh-only textures) aren't in the remap at all --
+        // they also never get written into any Block.Textures[] slot by ApplyRoomFaceTexture (slot
+        // selection is driven by real room-face geometry, not by iterating this table), so this
+        // TexInfo entry is simply never consulted; the 0 fallback is inert dead data, not a bug.
+        int newTile = tileRemap.TryGetValue(tile, out int nt) ? nt : 0;
+        // Bit 15 of NewFlags marks "this texture is used on a triangle face" (verified against
+        // TRosettaStone's miscellany.asc, tr4_object_texture NewFlags bit list). When set, only
+        // Vertices[0..2] are the real triangle corners; Vertices[3] is not reliably a duplicate of
+        // Vertices[2] in TombLib-compiled files and can hold an unrelated value (verified: a real
+        // case in alexhub2 had Vertices[0..2] forming a tight, correct 64x64-ish triangle while
+        // Vertices[3] was a distant outlier, inflating the naive 4-vertex bounding box to ~2x the
+        // real size and stretching the rendered texture -- exactly the "texture bigger than 64x64"
+        // symptom reported in Tomb Editor). Excluding Vertices[3] for triangle-flagged textures
+        // fixes this at the source rather than guessing from vertex duplication patterns.
+        bool isTriangleTexture = (texture.NewFlags & 0x8000) != 0;
+        var relevantVertices = isTriangleTexture ? texture.Vertices.Take(3) : texture.Vertices;
+        int minX = relevantVertices.Min(v => v.X >> 8);
+        int maxX = relevantVertices.Max(v => v.X >> 8);
+        int minY = relevantVertices.Min(v => v.Y >> 8);
+        int maxY = relevantVertices.Max(v => v.Y >> 8);
 
         minX = Math.Clamp(minX, 0, 255);
         maxX = Math.Clamp(maxX, minX, 255);
@@ -1251,7 +1395,7 @@ public class TrLevel : IDisposable
         return new TexInfo
         {
             X = (byte)minX,
-            Y = (ushort)((tile * 256) + minY),
+            Y = (ushort)((newTile * 256) + minY),
             Unused = 0,
             FlipX = 0,
             Right = (byte)Math.Max(1, maxX - minX),
@@ -1260,18 +1404,214 @@ public class TrLevel : IDisposable
         };
     }
 
-    private static void ApplyRoomMeshTextures(PrjRoom prjRoom, LevelRoom levelRoom, int objectTextureCount)
+    /// <summary>
+    /// Returns the inclusive [start,end] sector-index range a face's bounding box (in raw world
+    /// units) covers along one axis, clamped to the room's size. Used because the TR4 compiler
+    /// merges coplanar adjacent sector faces into a single larger quad/triangle -- a raw face can
+    /// span several sectors, so its texture must be assigned to every sector it covers, not just
+    /// the one under its centroid.
+    /// </summary>
+    private static (int start, int end) BlockRange(int minCoord, int maxCoord, int size)
     {
-        foreach (var face in levelRoom.Rectangles)
-            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextureCount);
-        foreach (var face in levelRoom.Triangles)
-            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextureCount);
+        int start = Math.Clamp(minCoord / 1024, 0, size - 1);
+        int end = Math.Clamp(Math.Max(minCoord, maxCoord - 1) / 1024, start, size - 1);
+        return (start, end);
     }
 
-    private static void ApplyRoomFaceTexture(PrjRoom prjRoom, LevelRoom levelRoom, RoomFace face, int objectTextureCount)
+    private static void ApplyRoomMeshTextures(PrjRoom prjRoom, LevelRoom levelRoom, ObjectTexture[] objectTextures)
+    {
+        // Seam key (ownX, ownZ, isXDirection) -> quads awaiting rank-based tier assignment (see
+        // FlushUnreliableWallSeams). Used for two cases: (a) "unreliable neighbor" seams (border/
+        // solid-rock walls, where the neighbor sector's Floor/Ceiling carry no real geometric
+        // meaning), and (b) any seam -- reliable neighbor or not -- with 3+ real compiled wall quads,
+        // since the per-corner comparison (2 shared corners) can only ever express up to 3 tiers and
+        // was found to silently drop QA/WS on seams with more real quads even when both sides'
+        // heights were perfectly legitimate (verified: alexhub2 room1 seam x=2/x=1,z=4 -- own and
+        // neighbor both had real, distinct corner heights, but the reference's own 5-tier assignment
+        // there [QA/Floor2/Middle/Ceiling2/WS] simply can't be derived from a 2-corner comparison).
+        var pending = new Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face, int minY, int maxY)>>();
+        var seamQuadCounts = CountWallQuadsPerSeam(levelRoom, prjRoom);
+
+        foreach (var face in levelRoom.Rectangles)
+            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures, pending, seamQuadCounts);
+        foreach (var face in levelRoom.Triangles)
+            ApplyRoomFaceTexture(prjRoom, levelRoom, face, objectTextures, pending, seamQuadCounts);
+
+        FlushUnreliableWallSeams(prjRoom, objectTextures, pending);
+    }
+
+    /// <summary>
+    /// First pass over a room's wall-shaped faces (mirrors the X-wall/Z-wall detection and
+    /// BlockRange coverage of ApplyRoomFaceTexture, but only counts -- no texture assignment yet).
+    /// Used by ApplyWallFace to decide, per seam, whether the simple 2-corner comparison can even
+    /// represent the real geometry there (see ApplyRoomMeshTextures' comment).
+    /// </summary>
+    private static Dictionary<(int, int, bool), int> CountWallQuadsPerSeam(LevelRoom levelRoom, PrjRoom prjRoom)
+    {
+        var counts = new Dictionary<(int, int, bool), int>();
+        void Count(int ownX, int ownZ, bool isXDirection)
+        {
+            var key = (ownX, ownZ, isXDirection);
+            counts.TryGetValue(key, out int c);
+            counts[key] = c + 1;
+        }
+
+        const int epsilon = 8;
+        foreach (var face in levelRoom.Rectangles.Concat(levelRoom.Triangles))
+        {
+            var vertices = face.Vertices
+                .Where(v => v < levelRoom.Vertices.Length)
+                .Select(v => levelRoom.Vertices[v])
+                .ToArray();
+            if (vertices.Length != face.Vertices.Length) continue;
+
+            int minX = vertices.Min(v => v.X), maxX = vertices.Max(v => v.X);
+            int minZ = vertices.Min(v => v.Z), maxZ = vertices.Max(v => v.Z);
+            int avgX = (int)Math.Round(vertices.Average(v => v.X));
+            int avgZ = (int)Math.Round(vertices.Average(v => v.Z));
+
+            bool looksLikeXWall = Math.Abs(maxX - minX) <= epsilon;
+            bool looksLikeZWall = Math.Abs(maxZ - minZ) <= epsilon;
+            if (!looksLikeXWall && !looksLikeZWall) continue; // floor/ceiling, not a wall
+
+            if (looksLikeXWall)
+            {
+                int seamX = (int)Math.Round(avgX / 1024.0);
+                bool isInteriorSeam = seamX > 0 && seamX < prjRoom.XSize;
+                int ownX = isInteriorSeam ? seamX : Math.Clamp(seamX, 0, prjRoom.XSize - 1);
+                var (bz0, bz1) = BlockRange(minZ, maxZ, prjRoom.ZSize);
+                for (int bz = bz0; bz <= bz1; bz++) Count(ownX, bz, true);
+            }
+            else
+            {
+                int seamZ = (int)Math.Round(avgZ / 1024.0);
+                bool isInteriorSeam = seamZ > 0 && seamZ < prjRoom.ZSize;
+                int ownZ = isInteriorSeam ? seamZ : Math.Clamp(seamZ, 0, prjRoom.ZSize - 1);
+                var (bx0, bx1) = BlockRange(minX, maxX, prjRoom.XSize);
+                for (int bx = bx0; bx <= bx1; bx++) Count(bx, ownZ, false);
+            }
+        }
+        return counts;
+    }
+
+    /// <summary>
+    /// Assigns QA/Middle/WS tiers to the wall quads accumulated for "unreliable neighbor" seams
+    /// (border/solid-rock walls, where the neighbor sector's Floor/Ceiling carry no real geometric
+    /// meaning -- see IsBorderOrSolid) by RANK among the real compiled quads at that exact seam,
+    /// instead of a fixed-fraction split of own's own span. Replaces an earlier "top/bottom sixth of
+    /// own's span" heuristic: measured on alexhub2, 84.4% of these seams have at most 3 real compiled
+    /// quads, which map naturally onto QA/Middle/WS by position (closest-to-floor / closest-to-
+    /// ceiling / everything else) -- using the quads' own real Y-boundaries instead of an arbitrary
+    /// fraction. Seams with more than 3 quads still can't be fully represented (same structural
+    /// limit as Floor2/Ceiling2 -- see DOCUMENTATION.md); extra quads beyond the first/last collapse
+    /// into Middle exactly as the old heuristic would, but the QA/WS boundary itself is now exact
+    /// rather than approximate.
+    /// avgY convention: raw TR Y is positive-down, so the LARGEST avgY among a seam's quads is
+    /// physically closest to the floor (-> QA) and the SMALLEST is closest to the ceiling (-> WS).
+    /// </summary>
+    private static void FlushUnreliableWallSeams(PrjRoom prjRoom, ObjectTexture[] objectTextures,
+        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face, int minY, int maxY)>> pending)
+    {
+        foreach (var ((ownX, ownZ, isXDirection), quads) in pending)
+        {
+            int target = ownX * prjRoom.ZSize + ownZ;
+            if (target < 0 || target >= prjRoom.Blocks.Length) continue;
+
+            int qaSlot = isXDirection ? 2 : 5;
+            int middleSlot = isXDirection ? 4 : 7;
+            int wsSlot = isXDirection ? 3 : 6;
+
+            var sorted = quads.OrderByDescending(q => q.avgY).ToList();
+
+            if (sorted.Count == 1)
+            {
+                // A lone quad has nothing to rank against, but if this seam has a real, in-bounds
+                // neighbor (a border/solid-rock-neighbor seam, not a genuine room edge), the own/
+                // neighbor corner heights are still real, physically-derived data -- even a
+                // room-boundary-flattened neighbor height (see IsBorderOrSolid) correctly reflects
+                // the compiled wall quad's real extent. IsBorderOrSolid's own doc comment describes
+                // the risk this guards against as a flattened height COINCIDENTALLY EQUALING the
+                // true neighbor height (hiding a real step), not a genuine nonzero difference being
+                // wrong -- so attempt the same per-corner QA/WS test ApplyWallFace uses, and only
+                // fall back to Middle when it finds no clean single-sided difference (matching the
+                // previous unconditional-Middle behavior for every case that was already correct).
+                int neighX = isXDirection ? ownX - 1 : ownX;
+                int neighZ = isXDirection ? ownZ : ownZ - 1;
+                int neighTarget = neighX * prjRoom.ZSize + neighZ;
+                int slot = middleSlot;
+                if (neighX >= 0 && neighZ >= 0 && neighX < prjRoom.XSize && neighZ < prjRoom.ZSize &&
+                    neighTarget >= 0 && neighTarget < prjRoom.Blocks.Length)
+                {
+                    var own = prjRoom.Blocks[target];
+                    var neigh = prjRoom.Blocks[neighTarget];
+                    int ownFloorA, ownFloorB, neighFloorA, neighFloorB, ownCeilA, ownCeilB, neighCeilA, neighCeilB;
+                    if (isXDirection)
+                    {
+                        ownFloorA = GetCornerFloorY(own, false, false); ownFloorB = GetCornerFloorY(own, false, true);
+                        neighFloorA = GetCornerFloorY(neigh, true, false); neighFloorB = GetCornerFloorY(neigh, true, true);
+                        ownCeilA = GetCornerCeilY(own, false, false); ownCeilB = GetCornerCeilY(own, false, true);
+                        neighCeilA = GetCornerCeilY(neigh, true, false); neighCeilB = GetCornerCeilY(neigh, true, true);
+                    }
+                    else
+                    {
+                        ownFloorA = GetCornerFloorY(own, false, false); ownFloorB = GetCornerFloorY(own, true, false);
+                        neighFloorA = GetCornerFloorY(neigh, false, true); neighFloorB = GetCornerFloorY(neigh, true, true);
+                        ownCeilA = GetCornerCeilY(own, false, false); ownCeilB = GetCornerCeilY(own, true, false);
+                        neighCeilA = GetCornerCeilY(neigh, false, true); neighCeilB = GetCornerCeilY(neigh, true, true);
+                    }
+                    bool hasQa = ownFloorA < neighFloorA || ownFloorB < neighFloorB || neighFloorA < ownFloorA || neighFloorB < ownFloorB;
+                    bool hasWs = ownCeilA > neighCeilA || ownCeilB > neighCeilB || neighCeilA > ownCeilA || neighCeilB > ownCeilB;
+                    // Both true means the lone quad spans the full floor-to-ceiling difference (a
+                    // genuine standalone Middle band, not a partial QA or WS step); both false means
+                    // no usable difference either. Either way, Middle is the correct call -- only a
+                    // clean single-sided difference picks QA or WS.
+                    if (hasQa && !hasWs)
+                    {
+                        slot = qaSlot;
+                        int loS = int.MaxValue, hiS = int.MinValue;
+                        if (ownFloorA < neighFloorA) { loS = Math.Min(loS, ownFloorA); hiS = Math.Max(hiS, neighFloorA); }
+                        if (ownFloorB < neighFloorB) { loS = Math.Min(loS, ownFloorB); hiS = Math.Max(hiS, neighFloorB); }
+                        if (neighFloorA < ownFloorA) { loS = Math.Min(loS, neighFloorA); hiS = Math.Max(hiS, ownFloorA); }
+                        if (neighFloorB < ownFloorB) { loS = Math.Min(loS, neighFloorB); hiS = Math.Max(hiS, ownFloorB); }
+                        if (QuadAboveFloorStep(sorted[0].minY, sorted[0].maxY, loS, hiS)) slot = wsSlot;
+                    }
+                    else if (hasWs && !hasQa) slot = wsSlot;
+                }
+
+                var (_, ti, fc, _, _) = sorted[0];
+                SetBlockTexture(prjRoom.Blocks[target].Textures[slot], ti, fc, objectTextures[ti]);
+                continue;
+            }
+
+            for (int i = 0; i < sorted.Count; i++)
+            {
+                int slot;
+                if (i == 0) slot = qaSlot;                    // closest to floor
+                else if (i == sorted.Count - 1) slot = wsSlot;     // closest to ceiling
+                else slot = middleSlot;
+
+                var (_, textureIndex, face, _, _) = sorted[i];
+                SetBlockTexture(prjRoom.Blocks[target].Textures[slot], textureIndex, face, objectTextures[textureIndex]);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Classifies a raw face (already known to be flat along one horizontal axis, i.e. a wall) or
+    /// a floor/ceiling face, and writes its texture into the correct one of Block.Textures[]'s 14
+    /// classic-PRJ slots. Block.Textures[] indexing is X-major (b = x*NumZ + z), matching the rest
+    /// of the codebase (LevelRoom.Sectors[], PrjRoom.Blocks[] population in ConvertToPrj) -- the
+    /// previous Z-major indexing here (b = z*XSize + x) silently wrote to the wrong block whenever
+    /// a room wasn't square (NumX != NumZ).
+    /// </summary>
+    private static void ApplyRoomFaceTexture(PrjRoom prjRoom, LevelRoom levelRoom, RoomFace face, ObjectTexture[] objectTextures,
+        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face, int minY, int maxY)>> pending,
+        Dictionary<(int, int, bool), int> seamQuadCounts)
     {
         int textureIndex = face.Texture & 0x7FFF;
-        if (textureIndex < 0 || textureIndex >= objectTextureCount || textureIndex > 1023) return;
+        // BlockTex.Index is now a full int (see its field comment), so no artificial 1024-entry
+        // ceiling here beyond the real bounds check against objectTextures itself.
+        if (textureIndex < 0 || textureIndex >= objectTextures.Length) return;
         var vertices = face.Vertices
             .Where(v => v < levelRoom.Vertices.Length)
             .Select(v => levelRoom.Vertices[v])
@@ -1285,57 +1625,520 @@ public class TrLevel : IDisposable
         int avgY = (int)Math.Round(vertices.Average(v => v.Y));
         int avgZ = (int)Math.Round(vertices.Average(v => v.Z));
 
-        int slot;
-        int blockX;
-        int blockZ;
         const int epsilon = 8;
 
-        if (Math.Abs(maxY - minY) <= epsilon)
-        {
-            blockX = Math.Clamp(avgX / 1024, 0, prjRoom.XSize - 1);
-            blockZ = Math.Clamp(avgZ / 1024, 0, prjRoom.ZSize - 1);
-            int blockIndex = blockZ * prjRoom.XSize + blockX;
-            if (blockIndex < 0 || blockIndex >= prjRoom.Blocks.Length) return;
+        bool looksLikeXWall = Math.Abs(maxX - minX) <= epsilon;
+        bool looksLikeZWall = Math.Abs(maxZ - minZ) <= epsilon;
 
-            int floorY = -prjRoom.Blocks[blockIndex].Floor * 256;
-            int ceilingY = -prjRoom.Blocks[blockIndex].Ceiling * 256;
-            if (Math.Abs(avgY - floorY) <= Math.Abs(avgY - ceilingY))
-                slot = face.IsTriangle ? 8 : 0;
-            else
-                slot = face.IsTriangle ? 9 : 1;
-        }
-        else if (Math.Abs(maxX - minX) <= epsilon)
+        if (!looksLikeXWall && !looksLikeZWall)
         {
-            blockX = Math.Clamp((int)Math.Round(avgX / 1024.0), 0, prjRoom.XSize - 1);
-            blockZ = Math.Clamp(avgZ / 1024, 0, prjRoom.ZSize - 1);
-            slot = 4;
-        }
-        else if (Math.Abs(maxZ - minZ) <= epsilon)
-        {
-            blockX = Math.Clamp(avgX / 1024, 0, prjRoom.XSize - 1);
-            blockZ = Math.Clamp((int)Math.Round(avgZ / 1024.0), 0, prjRoom.ZSize - 1);
-            slot = 7;
-        }
-        else
-        {
+            // Floor/ceiling, flat OR sloped: large extent in both X and Z. Previously this branch
+            // required near-zero Y variance (Math.Abs(maxY - minY) <= epsilon), which correctly
+            // caught flat floors/ceilings but silently DROPPED sloped ones entirely -- a tilted
+            // floor/ceiling face (Tilt/Roof FloorData) has large X and Z extent (so it fails both
+            // wall checks below) but also varies in Y (so it failed the old flat-Y gate too),
+            // meaning it matched NONE of the method's branches and got no texture at all. Gating on
+            // "not a wall" instead of "is flat" catches both cases uniformly. Classification uses
+            // each covered sector's real per-corner floor/ceiling reference (GetAvgCornerFloorY/
+            // CeilY) rather than a flat scalar -- for a genuinely flat sector this reduces to
+            // exactly the same value as before (FloorCorner/CeilCorner are all zero there).
+            var (bx0, bx1) = BlockRange(minX, maxX, prjRoom.XSize);
+            var (bz0, bz1) = BlockRange(minZ, maxZ, prjRoom.ZSize);
+            // Rotation/mirror is a property of the WHOLE face's UV mapping, so compute it once here
+            // (not per covered sector) -- only meaningful for quad Floor faces for now (see
+            // ComputeFloorQuadRotation's own comment); Ceiling and triangulated pieces keep the
+            // previous always-0/false behaviour until that formula is derived too.
+            var (floorRotation, floorFlip) = !face.IsTriangle
+                ? ComputeFloorQuadRotation(vertices, objectTextures[textureIndex].Vertices)
+                : ((byte)0, false);
+            var (ceilRotation, ceilFlip) = !face.IsTriangle
+                ? ComputeCeilingQuadRotation(vertices, objectTextures[textureIndex].Vertices)
+                : ((byte)0, false);
+
+            for (int bx = bx0; bx <= bx1; bx++)
+            for (int bz = bz0; bz <= bz1; bz++)
+            {
+                int target = bx * prjRoom.ZSize + bz;
+                if (target < 0 || target >= prjRoom.Blocks.Length) continue;
+
+                var targetBlock = prjRoom.Blocks[target];
+                int floorY = GetAvgCornerFloorY(targetBlock);
+                int ceilingY = GetAvgCornerCeilY(targetBlock);
+                int primarySlot = Math.Abs(avgY - floorY) <= Math.Abs(avgY - ceilingY) ? 0 : 1;
+                int slot;
+                if (!face.IsTriangle)
+                {
+                    slot = primarySlot;
+                }
+                else
+                {
+                    // A triangular face here could be (a) naturally-triangular partial coverage
+                    // (e.g. a diagonal room boundary) with no sibling -- belongs in the primary
+                    // Floor/Ceiling slot exactly like a rectangle would, or (b) one half of a
+                    // genuine two-triangle diagonal SPLIT with a DIFFERENT texture per triangle --
+                    // only case (b) should use the Floor_Triangle2/Ceiling_Triangle2 slot. Routing
+                    // every triangle to the Triangle2 slot unconditionally (an earlier version of
+                    // this code) left the primary Floor/Ceiling slot empty for any sector whose
+                    // floor/ceiling happened to be triangulated without a real split -- confirmed as
+                    // a real, common cause of missing Floor coverage (see DOCUMENTATION.md).
+                    // Distinguish by whether the primary slot is already occupied by a DIFFERENT
+                    // texture: if so, this is genuinely the second half of a split; otherwise this
+                    // is the first (or only) triangle and belongs in the primary slot.
+                    var existing = targetBlock.Textures[primarySlot];
+                    bool primaryOccupiedByDifferentTexture = existing.Tipo == 0x0007 && existing.Index != textureIndex;
+                    slot = primaryOccupiedByDifferentTexture ? (primarySlot == 0 ? 8 : 9) : primarySlot;
+                }
+                if (slot == 0 && !face.IsTriangle)
+                    SetBlockTexture(targetBlock.Textures[slot], textureIndex, face, objectTextures[textureIndex], floorRotation, floorFlip);
+                else if (slot == 1 && !face.IsTriangle)
+                    SetBlockTexture(targetBlock.Textures[slot], textureIndex, face, objectTextures[textureIndex], ceilRotation, ceilFlip);
+                else
+                    SetBlockTexture(targetBlock.Textures[slot], textureIndex, face, objectTextures[textureIndex]);
+            }
             return;
         }
 
-        int target = blockZ * prjRoom.XSize + blockX;
-        if (target < 0 || target >= prjRoom.Blocks.Length) return;
-        SetBlockTexture(prjRoom.Blocks[target].Textures[slot], textureIndex, face);
+        // Walls: the classic-PRJ format (verified against TombLib's PrjLoader.cs) only stores a
+        // sector's own -X ("North") and -Z ("West") walls in its own 14-slot array; a +X/+Z-facing
+        // wall is always stored as the NEIGHBOURING sector's -X/-Z wall instead (PrjLoader reads
+        // slot 4/7 from sector[x-1,z]/[x,z-1] when the current sector has no -X/-Z middle face of
+        // its own). Each side also has up to 3 vertical tiers: QA (a floor-height step, slot 2/5),
+        // Middle (the visible body between two rooms/heights, slot 4/7), WS (a ceiling-height step,
+        // slot 3/6). We never use the Floor2/Ceiling2 tier slots (10-13): raw TR4 FloorData only
+        // ever encodes one floor split and one ceiling split per sector, so a second stacked tier on
+        // the same side can't occur in compiled TR4 data. As with floor/ceiling, a merged wall face
+        // can span several sectors along its free axis, so we assign to every sector it covers.
+        if (looksLikeXWall)
+        {
+            int seamX = (int)Math.Round(avgX / 1024.0);
+            bool isInteriorSeam = seamX > 0 && seamX < prjRoom.XSize;
+            int ownX = isInteriorSeam ? seamX : Math.Clamp(seamX, 0, prjRoom.XSize - 1);
+            int neighborX = isInteriorSeam ? seamX - 1 : -1;
+            var (bz0, bz1) = BlockRange(minZ, maxZ, prjRoom.ZSize);
+            for (int bz = bz0; bz <= bz1; bz++)
+            {
+                bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, neighborX, bz) ||
+                    seamQuadCounts.GetValueOrDefault((ownX, bz, true)) >= 3;
+                ApplyWallFace(prjRoom, ownX, bz, neighborX, bz, avgY, textureIndex, face, objectTextures,
+                    qaSlot: 2, middleSlot: 4, wsSlot: 3, minY, maxY, seamQuadCounts.GetValueOrDefault((ownX, bz, true)) == 1, BorderSide(isInteriorSeam, levelRoom, ownX, bz, neighborX, bz), neighborUnreliable, pending);
+            }
+            return;
+        }
+
+        if (looksLikeZWall)
+        {
+            int seamZ = (int)Math.Round(avgZ / 1024.0);
+            bool isInteriorSeam = seamZ > 0 && seamZ < prjRoom.ZSize;
+            int ownZ = isInteriorSeam ? seamZ : Math.Clamp(seamZ, 0, prjRoom.ZSize - 1);
+            int neighborZ = isInteriorSeam ? seamZ - 1 : -1;
+            var (bx0, bx1) = BlockRange(minX, maxX, prjRoom.XSize);
+            for (int bx = bx0; bx <= bx1; bx++)
+            {
+                bool neighborUnreliable = !isInteriorSeam || IsBorderOrSolid(levelRoom, bx, neighborZ) ||
+                    seamQuadCounts.GetValueOrDefault((bx, ownZ, false)) >= 3;
+                ApplyWallFace(prjRoom, bx, ownZ, bx, neighborZ, avgY, textureIndex, face, objectTextures,
+                    qaSlot: 5, middleSlot: 7, wsSlot: 6, minY, maxY, seamQuadCounts.GetValueOrDefault((bx, ownZ, false)) == 1, BorderSide(isInteriorSeam, levelRoom, bx, ownZ, bx, neighborZ), neighborUnreliable, pending);
+            }
+        }
     }
 
-    private static void SetBlockTexture(BlockTex blockTex, int textureIndex, RoomFace face)
+    /// <summary>
+    /// A sector's converted Block.Floor/Ceiling is NOT trustworthy for wall-tier classification when
+    /// the sector is on the room's outer ring (ConvertToPrj forces Floor/Ceiling to the room's own
+    /// YBottom/YTop there, discarding the sector's real height data -- see the (j==0 || ... ) branch)
+    /// or when the raw sector is the classic TR wall sentinel (Floor == -127). In both cases the
+    /// neighbor's "height" carries no real geometric information, so comparing against it produces
+    /// false negatives whenever it happens to numerically coincide with the real neighbor's own floor/
+    /// ceiling (verified case: alexhub2 room 1, seam x=1/z=3 -- neighbor(0,3) is a border sector whose
+    /// forced Floor/Ceiling happened to equal own(1,3)'s real floor/ceiling, hiding a real QA+WS pair
+    /// of compiled wall faces behind an apparent "no difference" reading).
+    /// </summary>
+    private static bool IsBorderOrSolid(LevelRoom room, int x, int z)
+    {
+        if (x < 0 || z < 0 || x >= room.NumX || z >= room.NumZ) return true;
+        if (x == 0 || x == room.NumX - 1 || z == 0 || z == room.NumZ - 1) return true;
+        int idx = x * room.NumZ + z;
+        if (idx < 0 || idx >= room.Sectors.Length) return true;
+        return room.Sectors[idx].Floor == -127;
+    }
+
+    /// <summary>
+    /// Returns the raw-TR-Y (positive-down, same convention as vertex.Y/avgY) height of one corner
+    /// of a block's floor, honouring any Tilt/Roof/diagonal-split corner data already applied by
+    /// ApplyFloorData. FloorCorner index order verified against ApplyFloorData's own Tilt/Split
+    /// branches: [0]=XpZn [1]=XnZn [2]=XnZp [3]=XpZp.
+    /// </summary>
+    private static int GetCornerFloorY(Block block, bool xp, bool zp)
+    {
+        int idx = (xp, zp) switch { (true, false) => 0, (false, false) => 1, (false, true) => 2, (true, true) => 3 };
+        // SUBTRACT FloorCorner (not add): verified against the already-validated geometry path in
+        // Prj2Exporter.cs (`floorBase - block.FloorCorner[i]`), and confirmed empirically -- a real
+        // compiled quad on a tilted sector (room2 sector(1,3)) had Yrange=[-5120,-4608], with
+        // FloorCorner=0 corners correctly landing on -5120 either way, but the previous "+" sign put
+        // FloorCorner=2 corners at -5632 (impossibly higher than even the flat reference), when they
+        // should land at -4608 (the quad's real, lower extreme) -- only "-" gives that. This function
+        // is shared by wall QA/WS classification and floor/ceiling classification; the wrong sign was
+        // silently degrading both for any sector with a genuinely tilted floor.
+        return -(block.Floor - block.FloorCorner[idx]) * 256;
+    }
+
+    /// <summary>
+    /// Same as <see cref="GetCornerFloorY"/> but for the ceiling. CeilCorner uses a DIFFERENT index
+    /// order than FloorCorner (verified against ApplyFloorData's Roof/Split branches):
+    /// [0]=XpZp [1]=XnZp [2]=XnZn [3]=XpZn.
+    /// </summary>
+    private static int GetCornerCeilY(Block block, bool xp, bool zp)
+    {
+        int idx = (xp, zp) switch { (true, true) => 0, (false, true) => 1, (false, false) => 2, (true, false) => 3 };
+        return -(block.Ceiling + block.CeilCorner[idx]) * 256;
+    }
+
+    /// <summary>
+    /// Average of a block's 4 real corner floor heights. For a genuinely flat sector (FloorCorner
+    /// all zero) this reduces to exactly the same value as the old flat -Block.Floor*256 scalar; for
+    /// a tilted/sloped sector (Tilt/Roof/Split FloorData) it correctly reflects the real average
+    /// height instead of the pre-slope reference point, which is what floor/ceiling face
+    /// classification below needs.
+    /// </summary>
+    private static int GetAvgCornerFloorY(Block block) =>
+        (GetCornerFloorY(block, false, false) + GetCornerFloorY(block, true, false) +
+         GetCornerFloorY(block, false, true) + GetCornerFloorY(block, true, true)) / 4;
+
+    private static int GetAvgCornerCeilY(Block block) =>
+        (GetCornerCeilY(block, false, false) + GetCornerCeilY(block, true, false) +
+         GetCornerCeilY(block, false, true) + GetCornerCeilY(block, true, true)) / 4;
+
+    /// <summary>
+    /// Writes a wall face's texture into the "owning" block's QA/Middle/WS slot. (ownX,ownZ) is the
+    /// block whose own -X/-Z side this wall represents (always the higher-index side of the seam,
+    /// per PrjLoader's storage convention); (neighborX,neighborZ) is the block across the seam, or
+    /// an out-of-range coordinate if this is a room-boundary wall with no neighbour.
+    /// Tier classification (QA/Middle/WS) replicates TombLib's own per-corner wall rule (verified
+    /// against TombLib/LevelData/SectorGeometry/RoomExtensionMethods.cs -- GetPositiveXWallData/
+    /// GetNegativeXWallData/etc. -- and SectorWallData.cs's zero-height-face skip): a QA (floor-step)
+    /// face exists on "own" only where own's floor is higher than the neighbor's AT A SHARED CORNER,
+    /// evaluated per corner rather than as a single flat scalar -- the previous flat-scalar
+    /// comparison (~74% accuracy per validation notes) missed exactly the sloped/tilted sectors
+    /// where the two shared corners disagree on which side is higher. Mirrored for WS (ceiling-step)
+    /// using "own ceiling lower than neighbor's".
+    /// </summary>
+    private static void ApplyWallFace(PrjRoom prjRoom, int ownX, int ownZ, int neighborX, int neighborZ, int avgY,
+        int textureIndex, RoomFace face, ObjectTexture[] objectTextures, int qaSlot, int middleSlot, int wsSlot,
+        int quadMinY, int quadMaxY, bool loneQuad, int borderSide, bool neighborUnreliable,
+        Dictionary<(int, int, bool), List<(int avgY, int textureIndex, RoomFace face, int minY, int maxY)>> pending)
+    {
+        int ownTarget = ownX * prjRoom.ZSize + ownZ;
+        if (ownTarget < 0 || ownTarget >= prjRoom.Blocks.Length) return;
+
+        int slot = middleSlot; // default: full-height wall (room edge, or no floor/ceiling mismatch found)
+        bool hasNeighbor = neighborX >= 0 && neighborZ >= 0 && neighborX < prjRoom.XSize && neighborZ < prjRoom.ZSize;
+
+
+        if (hasNeighbor && loneQuad && borderSide != 0)
+        {
+            // Exactly one side of the seam is a room-border / solid sector (its stored heights are
+            // flattened and carry no information) and the other side is a real sector. In the reference
+            // the hidden wall sector's heights partition the real sector's floor-to-ceiling span into
+            // QA (below wall floor) / Middle / WS (above wall ceiling), and the single compiled quad's
+            // extent against the real side's floor and ceiling shows which tiers exist (DOCUMENTATION.md 2.22).
+            int neighborTargetB = neighborX * prjRoom.ZSize + neighborZ;
+            if (neighborTargetB >= 0 && neighborTargetB < prjRoom.Blocks.Length)
+            {
+                bool relIsOwn = borderSide == 2;
+                var relBlock = relIsOwn ? prjRoom.Blocks[ownTarget] : prjRoom.Blocks[neighborTargetB];
+                bool isXDir = qaSlot == 2;
+                // Shared-seam corners of the reliable sector: own's -X/-Z side, or neighbor's +X/+Z side.
+                bool xp0 = isXDir ? !relIsOwn : false, zp0 = isXDir ? false : !relIsOwn;
+                bool xp1 = isXDir ? !relIsOwn : true, zp1 = isXDir ? true : !relIsOwn;
+                int f0 = GetCornerFloorY(relBlock, xp0, zp0), f1 = GetCornerFloorY(relBlock, xp1, zp1);
+                int c0 = GetCornerCeilY(relBlock, xp0, zp0), c1 = GetCornerCeilY(relBlock, xp1, zp1);
+                bool touchesFloor = quadMaxY >= Math.Min(f0, f1) - 8 && quadMaxY <= Math.Max(f0, f1) + 8;
+                bool touchesCeil = quadMinY >= Math.Min(c0, c1) - 8 && quadMinY <= Math.Max(c0, c1) + 8;
+                int borderSlot = touchesCeil ? wsSlot : touchesFloor ? qaSlot : middleSlot;
+                SetBlockTexture(prjRoom.Blocks[ownTarget].Textures[borderSlot], textureIndex, face, objectTextures[textureIndex]);
+                return;
+            }
+        }
+        // Own side is a border/solid sector (flattened heights): a seam with 2+ stacked quads needs the same rank-based
+        // QA/Middle/WS split as a border/solid neighbor does (lone quads were handled above).
+        if (borderSide == 1) neighborUnreliable = true;
+
+        if (hasNeighbor && neighborUnreliable)
+        {
+            // Defer to FlushUnreliableWallSeams: collect this quad alongside every other real
+            // compiled quad at the same seam, then assign QA/Middle/WS by RANK once all of them
+            // are known, instead of guessing from a fixed fraction of own's own span in isolation.
+            bool isXDirection0 = qaSlot == 2;
+            var key = (ownX, ownZ, isXDirection0);
+            if (!pending.TryGetValue(key, out var list)) pending[key] = list = new List<(int, int, RoomFace, int, int)>();
+            list.Add((avgY, textureIndex, face, quadMinY, quadMaxY));
+            return;
+        }
+        else if (hasNeighbor)
+        {
+            int neighborTarget = neighborX * prjRoom.ZSize + neighborZ;
+            if (neighborTarget >= 0 && neighborTarget < prjRoom.Blocks.Length)
+            {
+                var ownBlock = prjRoom.Blocks[ownTarget];
+                var neighborBlock = prjRoom.Blocks[neighborTarget];
+
+                // Seam corners shared between own and neighbor, in own's local corner naming.
+                // X-direction seam (own is the higher-X sector, its -X side faces neighbor's +X
+                // side): shared corners are own's XnZn/XnZp == neighbor's XpZn/XpZp.
+                // Z-direction seam (own is the higher-Z sector, its -Z side faces neighbor's +Z
+                // side): shared corners are own's XnZn/XpZn == neighbor's XnZp/XpZp.
+                bool isXDirection = qaSlot == 2;
+
+                int ownFloorA, ownFloorB, neighFloorA, neighFloorB;
+                int ownCeilA, ownCeilB, neighCeilA, neighCeilB;
+                if (isXDirection)
+                {
+                    ownFloorA = GetCornerFloorY(ownBlock, xp: false, zp: false);   // own XnZn
+                    ownFloorB = GetCornerFloorY(ownBlock, xp: false, zp: true);    // own XnZp
+                    neighFloorA = GetCornerFloorY(neighborBlock, xp: true, zp: false); // neighbor XpZn
+                    neighFloorB = GetCornerFloorY(neighborBlock, xp: true, zp: true);  // neighbor XpZp
+
+                    ownCeilA = GetCornerCeilY(ownBlock, xp: false, zp: false);
+                    ownCeilB = GetCornerCeilY(ownBlock, xp: false, zp: true);
+                    neighCeilA = GetCornerCeilY(neighborBlock, xp: true, zp: false);
+                    neighCeilB = GetCornerCeilY(neighborBlock, xp: true, zp: true);
+                }
+                else
+                {
+                    ownFloorA = GetCornerFloorY(ownBlock, xp: false, zp: false);   // own XnZn
+                    ownFloorB = GetCornerFloorY(ownBlock, xp: true, zp: false);    // own XpZn
+                    neighFloorA = GetCornerFloorY(neighborBlock, xp: false, zp: true); // neighbor XnZp
+                    neighFloorB = GetCornerFloorY(neighborBlock, xp: true, zp: true);  // neighbor XpZp
+
+                    ownCeilA = GetCornerCeilY(ownBlock, xp: false, zp: false);
+                    ownCeilB = GetCornerCeilY(ownBlock, xp: true, zp: false);
+                    neighCeilA = GetCornerCeilY(neighborBlock, xp: false, zp: true);
+                    neighCeilB = GetCornerCeilY(neighborBlock, xp: true, zp: true);
+                }
+
+                // QA occupies this shared slot when EITHER side has real step geometry here: own's
+                // floor higher than neighbor's (own's own QA face) OR neighbor's floor higher than
+                // own's (neighbor's +X/+Z QA face, mirrored into this same physical slot per the
+                // classic-PRJ storage convention -- verified in PrjLoader.cs: slot 2/5 always lives on
+                // the higher-index sector regardless of which side geometrically owns the step).
+                // Missing the mirrored direction was a real bug: any seam where the NEIGHBOR (not
+                // own) had the taller floor fell through entirely to Middle, even with a real
+                // compiled quad present (verified: alexhub2 room0 seam x=1/x=2,z=3 -- neighbor's
+                // sloped floor was higher there, own's flat floor was not, so hasQaOnOwn was always
+                // false under the own-only test despite a real, correctly-shaped QA quad existing).
+                bool qaValidA = ownFloorA < neighFloorA;
+                bool qaValidB = ownFloorB < neighFloorB;
+                bool qaMirrorValidA = neighFloorA < ownFloorA;
+                bool qaMirrorValidB = neighFloorB < ownFloorB;
+                bool hasQaOnOwn = qaValidA || qaValidB || qaMirrorValidA || qaMirrorValidB;
+
+                bool wsValidA = ownCeilA > neighCeilA;
+                bool wsValidB = ownCeilB > neighCeilB;
+                bool wsMirrorValidA = neighCeilA > ownCeilA;
+                bool wsMirrorValidB = neighCeilB > ownCeilB;
+                bool hasWsOnOwn = wsValidA || wsValidB || wsMirrorValidA || wsMirrorValidB;
+
+                if (hasQaOnOwn)
+                {
+                    int loF = int.MaxValue, hiF = int.MinValue;
+                    if (qaValidA) { loF = Math.Min(loF, ownFloorA); hiF = Math.Max(hiF, neighFloorA); }
+                    if (qaValidB) { loF = Math.Min(loF, ownFloorB); hiF = Math.Max(hiF, neighFloorB); }
+                    if (qaMirrorValidA) { loF = Math.Min(loF, neighFloorA); hiF = Math.Max(hiF, ownFloorA); }
+                    if (qaMirrorValidB) { loF = Math.Min(loF, neighFloorB); hiF = Math.Max(hiF, ownFloorB); }
+                    if (avgY >= loF && avgY <= hiF) slot = qaSlot;
+                }
+                if (slot == middleSlot && hasWsOnOwn)
+                {
+                    int loC = int.MaxValue, hiC = int.MinValue;
+                    if (wsValidA) { loC = Math.Min(loC, neighCeilA); hiC = Math.Max(hiC, ownCeilA); }
+                    if (wsValidB) { loC = Math.Min(loC, neighCeilB); hiC = Math.Max(hiC, ownCeilB); }
+                    if (wsMirrorValidA) { loC = Math.Min(loC, ownCeilA); hiC = Math.Max(hiC, neighCeilA); }
+                    if (wsMirrorValidB) { loC = Math.Min(loC, ownCeilB); hiC = Math.Max(hiC, neighCeilB); }
+                    if (avgY >= loC && avgY <= hiC) slot = wsSlot;
+                }
+                // A lone compiled quad that sits on the ceiling side of a real floor step, with no ceiling
+                // difference, is the reference's WS face and no QA exists there (DOCUMENTATION.md 2.21).
+                if (loneQuad && hasQaOnOwn && !hasWsOnOwn)
+                {
+                    int loS = int.MaxValue, hiS = int.MinValue;
+                    if (qaValidA) { loS = Math.Min(loS, ownFloorA); hiS = Math.Max(hiS, neighFloorA); }
+                    if (qaValidB) { loS = Math.Min(loS, ownFloorB); hiS = Math.Max(hiS, neighFloorB); }
+                    if (qaMirrorValidA) { loS = Math.Min(loS, neighFloorA); hiS = Math.Max(hiS, ownFloorA); }
+                    if (qaMirrorValidB) { loS = Math.Min(loS, neighFloorB); hiS = Math.Max(hiS, ownFloorB); }
+                    if (QuadAboveFloorStep(quadMinY, quadMaxY, loS, hiS)) slot = wsSlot;
+                }
+            }
+        }
+
+        SetBlockTexture(prjRoom.Blocks[ownTarget].Textures[slot], textureIndex, face, objectTextures[textureIndex]);
+    }
+
+    /// <summary>
+    /// 0 = neither or both sides of the seam are border/solid sectors, 1 = only OWN is, 2 = only the
+    /// NEIGHBOR is. Non-interior seams (room edge) always return 0.
+    /// </summary>
+    private static int BorderSide(bool isInteriorSeam, LevelRoom room, int ownX, int ownZ, int neighborX, int neighborZ)
+    {
+        if (!isInteriorSeam) return 0;
+        bool own = IsBorderOrSolid(room, ownX, ownZ), neigh = IsBorderOrSolid(room, neighborX, neighborZ);
+        return own == neigh ? 0 : own ? 1 : 2;
+    }
+    /// <summary>
+    /// True when a compiled wall quad does not cover its seam's floor-step band but lies next to it on
+    /// the smaller-Y side with its far end short of the band's far end. Measured on alexhub2 (single-quad
+    /// seams, floor step present, no ceiling step): 71 of 95 such seams are WS in the reference.
+    /// </summary>
+    private static bool QuadAboveFloorStep(int quadMinY, int quadMaxY, int loStep, int hiStep)
+        => loStep != int.MaxValue && quadMaxY < hiStep - 8 && quadMinY <= loStep + 8;
+    private static void SetBlockTexture(BlockTex blockTex, int textureIndex, RoomFace face, ObjectTexture texture, byte rotation = 0, bool flip = false)
     {
         blockTex.Tipo = 0x0007;
-        blockTex.Index = (byte)(textureIndex & 0xFF);
-        blockTex.Flags1 = (byte)((textureIndex >> 8) & 0x03);
+        // No more 8/10-bit packing here -- see the BlockTex.Index field comment. Flags1 no longer
+        // carries any part of the index; its low bits are simply left at 0 (unused) below, with
+        // 0x04/0x08/0x80 still used for DoubleSided/BlendMode/flip exactly as before.
+        blockTex.Index = textureIndex;
         if ((face.Texture & 0x8000) != 0)
             blockTex.Flags1 |= 0x04;
-        blockTex.Rotation = 0;
+        // Attribute: 0 = opaque, 1 = alpha-tested, 2 = additive (TRosettaStone tr4_object_texture).
+        // Alpha-tested (1) needs no explicit flag here: TombLib's own compiler auto-detects the need
+        // for alpha testing by scanning the actual texture pixels (TexInfoManager.SortOutAlpha)
+        // regardless of any stored attribute -- only additive needs to be signalled explicitly here,
+        // matching PrjLoader's own 0x08 bit convention (BlendMode = Flags1 & 0x08 ? Additive : Normal).
+        if (texture.Attribute == 2)
+            blockTex.Flags1 |= 0x08;
+        if (flip)
+            blockTex.Flags1 |= 0x80;
+        blockTex.Rotation = rotation;
         blockTex.Triangle = 0;
         blockTex.Filler = 0;
+        blockTex.SourceFace = face;
+        blockTex.SourceTexture = texture;
+    }
+
+    /// <summary>
+    /// Shared corner/box extraction for Floor and Ceiling quad rotation derivation: for a quad face,
+    /// finds each of the 4 world corners' raw UV, determines which box-corner (0=TL,1=TR,2=BR,3=BL
+    /// of the texture's own axis-aligned bounding box) each one lands on, and classifies the winding
+    /// as a pure rotation, a pure mirror, or neither (returns null for the latter -- e.g. a
+    /// degenerate or distorted face -- so callers can fall back to the safe (0,false) default).
+    /// </summary>
+    private static (int bXpZn, int bXnZn, int bXnZp, int bXpZp, bool isMirrored)? ComputeCornerBoxIndices(RoomVertex[] vertices, TextureVertex[] textureVertices)
+    {
+        int minX = vertices.Min(v => (int)v.X), maxX = vertices.Max(v => (int)v.X);
+        int minZ = vertices.Min(v => (int)v.Z), maxZ = vertices.Max(v => (int)v.Z);
+        if (minX == maxX || minZ == maxZ) return null;
+
+        (int u, int v)? FindCornerUv(bool wantMaxX, bool wantMaxZ)
+        {
+            for (int i = 0; i < vertices.Length && i < textureVertices.Length; i++)
+            {
+                bool atX = vertices[i].X == (wantMaxX ? maxX : minX);
+                bool atZ = vertices[i].Z == (wantMaxZ ? maxZ : minZ);
+                if (atX && atZ) return (textureVertices[i].X >> 8, textureVertices[i].Y >> 8);
+            }
+            return null;
+        }
+
+        var uvXpZn = FindCornerUv(true, false);
+        var uvXnZn = FindCornerUv(false, false);
+        var uvXnZp = FindCornerUv(false, true);
+        var uvXpZp = FindCornerUv(true, true);
+        if (uvXpZn == null || uvXnZn == null || uvXnZp == null || uvXpZp == null) return null;
+
+        int boxMinU = Math.Min(Math.Min(uvXpZn.Value.u, uvXnZn.Value.u), Math.Min(uvXnZp.Value.u, uvXpZp.Value.u));
+        int boxMaxU = Math.Max(Math.Max(uvXpZn.Value.u, uvXnZn.Value.u), Math.Max(uvXnZp.Value.u, uvXpZp.Value.u));
+        int boxMinV = Math.Min(Math.Min(uvXpZn.Value.v, uvXnZn.Value.v), Math.Min(uvXnZp.Value.v, uvXpZp.Value.v));
+        int boxMaxV = Math.Max(Math.Max(uvXpZn.Value.v, uvXnZn.Value.v), Math.Max(uvXnZp.Value.v, uvXpZp.Value.v));
+        if (boxMinU == boxMaxU || boxMinV == boxMaxV) return null;
+
+        int BoxIndex((int u, int v) uv)
+        {
+            bool atMaxU = Math.Abs(uv.u - boxMaxU) < Math.Abs(uv.u - boxMinU);
+            bool atMaxV = Math.Abs(uv.v - boxMaxV) < Math.Abs(uv.v - boxMinV);
+            return (atMaxU, atMaxV) switch { (false, false) => 0, (true, false) => 1, (true, true) => 2, (false, true) => 3 };
+        }
+
+        int bXpZn = BoxIndex(uvXpZn.Value), bXnZn = BoxIndex(uvXnZn.Value),
+            bXnZp = BoxIndex(uvXnZp.Value), bXpZp = BoxIndex(uvXpZp.Value);
+
+        // World-corner cycle XpZn -> XnZn -> XnZp -> XpZp -> (XpZn): a pure rotation keeps this in
+        // step with the box's own cycle (each successive box-index +1 mod 4); a mirrored UV
+        // assignment instead decreases by 1 mod 4 at each step.
+        int stepA = (bXnZn - bXpZn + 4) % 4;
+        int stepB = (bXnZp - bXnZn + 4) % 4;
+        int stepC = (bXpZp - bXnZp + 4) % 4;
+
+        bool isRotationOnly = stepA == 1 && stepB == 1 && stepC == 1;
+        bool isMirrored = stepA == 3 && stepB == 3 && stepC == 3;
+        if (!isRotationOnly && !isMirrored) return null;
+
+        return (bXpZn, bXnZn, bXnZp, bXpZp, isMirrored);
+    }
+
+    /// <summary>
+    /// Computes the classic-PRJ Rotation (0-3) and mirror-flip flag a Floor/Floor_Triangle2 QUAD
+    /// face needs so that, once decoded by TombLib's PrjLoader-verbatim LoadTextureArea (see
+    /// Prj2Exporter.cs), the resulting TexCoord0-3 reproduce the SAME per-corner UV mapping the raw
+    /// TR4 face+texture data actually specifies -- instead of the always-0 default, which left every
+    /// floor tile in its texture's "natural" orientation regardless of how the level really placed it
+    /// (visible as floor tiles that should be rotated/mirrored all facing the same way).
+    ///
+    /// Derivation (empirically verified against a real sector: alexhub2 room0 sector(1,1) -- see
+    /// DOCUMENTATION.md): TombLib's Floor decode assigns TexCoord0/1/2/3 to the FIXED world corners
+    /// XnZn/XnZp/XpZp/XpZn (in that order) from a "uv[]" array built from the plain axis-aligned
+    /// texture bounding box (uv[0]=top-left, uv[1]=top-right, uv[2]=bottom-right, uv[3]=bottom-left),
+    /// after first (if the flip flag is set) swapping uv[0]&lt;-&gt;uv[1] and uv[2]&lt;-&gt;uv[3], then
+    /// cyclically rotating the array by Reff=(Rotation+2)%4 steps. Solving for the box-index the raw
+    /// data assigns to world corner XnZn gives Rotation=(1-bXnZn) mod 4 in the non-mirrored case.
+    /// Returns (0,false) for any face whose raw UV winding isn't a clean rotation or mirror of its
+    /// own bounding box (shouldn't happen for a real, undistorted floor tile) rather than guessing.
+    /// </summary>
+    private static (byte rotation, bool flip) ComputeFloorQuadRotation(RoomVertex[] vertices, TextureVertex[] textureVertices)
+    {
+        var r = ComputeCornerBoxIndices(vertices, textureVertices);
+        if (r == null) return (0, false);
+        var (_, bXnZn, _, _, isMirrored) = r.Value;
+
+        int effectiveBXnZn = isMirrored ? new[] { 1, 0, 3, 2 }[bXnZn] : bXnZn;
+        int rotation = ((1 - effectiveBXnZn) % 4 + 4) % 4;
+        return ((byte)rotation, isMirrored);
+    }
+
+    /// <summary>
+    /// Computes Rotation/flip for a Ceiling quad face. Unlike Floor, this was NOT successfully
+    /// derived analytically from TombLib source (see the long investigation in DOCUMENTATION.md,
+    /// 2.20) -- the naive derivation (mirroring Floor's approach onto Ceiling's differently-shaped
+    /// LoadTextureArea decode branch) got 0% exact match. What DID work: confirmed from TombLib's
+    /// real source (RoomGeometry.cs AddQuad/BuildFloorOrCeilingFace, Sector.GetFaceTexture) that
+    /// Ceiling's STORED TexCoord0-3 use the EXACT SAME fixed world-corner convention as Floor's
+    /// (TexCoord0=XnZn, TexCoord1=XnZp, TexCoord2=XpZp, TexCoord3=XpZn) -- the Ceiling-specific
+    /// TexCoord0&lt;-&gt;TexCoord2 swap in RoomGeometry.Build only touches the render-mesh triangle list,
+    /// not the sector-stored value we compare against. Then, since our raw TR4 quad's UV winding
+    /// splits into two distinct geometric groups depending on whether ComputeCornerBoxIndices sees a
+    /// pure-rotation winding (steps of +1) or a reversed one (steps of -1, labelled "mirrored" here --
+    /// empirically this reversal correlates with the compiled quad's own backface-culling winding
+    /// direction for a downward-facing polygon, NOT an artist's mirror choice), a brute-force search
+    /// across 668 real flat Ceiling quad sectors (with a reference match) found the best-fitting
+    /// formula separately for each group -- NEVER setting the flip bit in either case (flip=false
+    /// always outperformed flip=true for both groups in the same search):
+    ///   - non-reversed winding: Rotation = (0 - bXpZn) % 4
+    ///   - reversed winding:     Rotation = (3 - bXpZn) % 4
+    /// Combined full-decode validation (all 4 TexCoord slots, not just one) against those 668
+    /// samples: 560/668 (83.8%) exact match -- a large improvement over the 0% naive attempt, though
+    /// short of Floor's 99.2%. The remaining ~16% gap is not understood (possibly a further subgroup
+    /// within one of the two winding patterns, or a rarer third case); treat this as "good enough to
+    /// ship, not fully solved" and see DOCUMENTATION.md 2.20 before trying to improve it further.
+    /// </summary>
+    private static (byte rotation, bool flip) ComputeCeilingQuadRotation(RoomVertex[] vertices, TextureVertex[] textureVertices)
+    {
+        var r = ComputeCornerBoxIndices(vertices, textureVertices);
+        if (r == null) return (0, false);
+        var (bXpZn, _, _, _, isMirrored) = r.Value;
+
+        int rotation = isMirrored
+            ? ((3 - bXpZn) % 4 + 4) % 4
+            : ((0 - bXpZn) % 4 + 4) % 4;
+        return ((byte)rotation, false);
     }
 
     private static void ApplyFloorData(Block block, ParsedFloorData fd, LevelRoom r1, bool fixFdivs)
