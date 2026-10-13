@@ -939,6 +939,21 @@ for 20 (precision 37.5%); restricted to water-adjacent portals it is 12 against 
 **Consequence:** nothing in the TR4 identifies Traversable portals reliably, and Solid ones leave no trace. `Prj2Exporter` therefore keeps `PortalOpacity.None` for every
 portal (the rejected experiments of 2.32 confirmed that guessing adds floor over openings the reference leaves open). A faithful opacity needs information the TR4 does
 not contain, so it has to come from the author (an override list per portal) rather than from inference.
+### 2.37 -- Room ambient light (brightness, RGB)
+
+Every room was exported with `AmbientLight = (1, 1, 1)`, the `Room` constructor argument, whatever the TR4 held. TombLib compiles it to the room colour with
+`byte = AmbientLight * 128` per channel (Compilers/Rooms.cs `PackColorTo24Bit`, written as R, G, B by the TR4 room writer), and `TrLevel` already reads the four colour bytes
+(B, G, R, A) of every room.
+
+**Measured against the reference (PrjProbe, now the ambient probe; best-fitting reference room per 2.33):** in all **177 of 177** rooms the TR4 colour is exactly
+**4 higher per channel** than the reference's `AmbientLight * 128` (R, G, B alike, normal and water rooms alike; 30 distinct values). The reference also holds NEGATIVE
+ambient values (as low as -4, i.e. a compiled byte of 0), which the compile clamps, so a colour byte of 0 only says "reference <= -4".
+
+**Fix (`Prj2Exporter.AmbientLightFromTr4`):** `AmbientLight = (colour byte - 4) / 128` per channel, not clamped (a byte of 0 is inverted to -4, the least negative candidate).
+Result: our export's ambient equals the reference's in **177 of 177 rooms** (before: 0 of 177).
+
+**Caveat:** the +4 is empirical. TombLib's code shows no such offset, so it comes from how this level was compiled; the 28 original TR4 game levels have no reference to check
+it against, where subtracting 4 may be off by 4/128 (3% of the range) in every room.
 ---
 
 ## Key structural lessons (apply to future work on this codebase)

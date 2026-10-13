@@ -90,7 +90,7 @@ public static class Prj2Exporter
             string roomName = new string(pr.Name).TrimEnd('\0', ' ');
             if (string.IsNullOrWhiteSpace(roomName)) roomName = $"Room{i}";
 
-            var room = new Room(level, pr.XSize, pr.ZSize, Vector3.One, roomName);
+            var room = new Room(level, pr.XSize, pr.ZSize, AmbientLightFromTr4(trLevel.Rooms[i]), roomName);
             // Position.X/Z are sector-grid units (matching XSize/ZSize), but Position.Y must be
             // world units, not clicks (verified: TombLib's Room.Position.Y is compared directly
             // against Prj2Loader-reconstructed sector heights, which are in world units).
@@ -360,6 +360,19 @@ public static class Prj2Exporter
                     sector.SetFaceTexture(target, filled);
                 }
             }
+    }
+    /// <summary>
+    /// Room ambient light (the room's own brightness, RGB) from the TR4 room colour (DOCUMENTATION.md 2.37). TombLib compiles
+    /// <c>AmbientLight</c> to bytes with <c>byte = AmbientLight * 128</c> (Compilers/Rooms.cs, PackColorTo24Bit) and writes them as the room colour
+    /// (R, G, B). On alexhub2 the colour of EVERY room (177 of 177) is exactly 4 higher per channel than the reference's AmbientLight * 128, so the stored
+    /// value is inverted with that offset; the offset is an empirical property of this level's compile, not something found in TombLib's code.
+    /// </summary>
+    private static Vector3 AmbientLightFromTr4(LevelRoom room)
+    {
+        const float compileOffset = 4f;
+        // Not clamped at 0: the reference holds negative ambient values (as low as -4/128) whose compiled byte is clamped to 0, so a colour byte of 0
+        // can only be inverted to the least negative candidate, -4.
+        return new Vector3(room.Colour.R - compileOffset, room.Colour.G - compileOffset, room.Colour.B - compileOffset) / 128f;
     }
     /// <summary>
     /// Splits a set of sector cells into disjoint rectangles that cover exactly those cells (DOCUMENTATION.md 2.32). The
