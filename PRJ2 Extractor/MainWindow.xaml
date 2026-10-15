@@ -1,92 +1,257 @@
-﻿<Window x:Class="PRJ2_Extractor.MainWindow"
+<Window x:Class="PRJ2_Extractor.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d"
-        Title="PRJ2 Extractor"
-        Height="355" Width="479"
-        MinHeight="355" MinWidth="479"
-        AllowDrop="True"
-        Drop="Window_Drop"
-        DragOver="Window_DragOver">
-    <DockPanel>
-        <Menu DockPanel.Dock="Top">
-            <MenuItem Header="_File">
-                <MenuItem Header="_Open..." Click="OpenTr4_Click" InputGestureText="Ctrl+O"/>
-                <MenuItem x:Name="SaveAsMenuItem" Header="Save _As..." Click="SaveAs_Click" IsEnabled="False"/>
-                <MenuItem x:Name="ExportPrj2MenuItem" Header="_Export PRJ2 (Tomb Editor)..." Click="ExportPrj2_Click" IsEnabled="False"/>
-                <Separator/>
-                <MenuItem Header="E_xit" Click="Exit_Click"/>
-            </MenuItem>
-            <MenuItem x:Name="OptionsMenuItem" Header="_Options" Visibility="Collapsed">
-                <MenuItem x:Name="Tr2PrjLinksMenuItem" Header="_TR2PRJ links" IsCheckable="True"/>
-            </MenuItem>
-        </Menu>
+        Title="{Binding WindowTitle}"
+        Width="1060" Height="740" MinWidth="920" MinHeight="640"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource WindowBackground}"
+        FontSize="13"
+        AllowDrop="True" UseLayoutRounding="True" SnapsToDevicePixels="True"
+        PreviewDragOver="Window_PreviewDragOver" DragLeave="Window_DragLeave" Drop="Window_Drop">
 
-        <StatusBar DockPanel.Dock="Bottom">
-            <StatusBarItem>
-                <TextBlock x:Name="StatusText" Text=""/>
-            </StatusBarItem>
-        </StatusBar>
+    <Window.InputBindings>
+        <KeyBinding Key="O" Modifiers="Control" Command="{Binding OpenLevelCommand}"/>
+        <KeyBinding Key="E" Modifiers="Control" Command="{Binding ExportCommand}"/>
+    </Window.InputBindings>
 
-        <Grid>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- ============ header ============ -->
+        <Border Grid.Row="0" Background="White" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,0,0,1" Padding="24,14">
+            <Grid>
+                <StackPanel>
+                    <TextBlock Text="PRJ2 Extractor" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
+                    <TextBlock Text="Tomb Raider 4 / 5 level to Tomb Editor project (.prj2), with textures" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
+                </StackPanel>
+                <Border HorizontalAlignment="Right" VerticalAlignment="Center" Background="{StaticResource AccentSoft}" CornerRadius="10" Padding="10,3">
+                    <TextBlock Text="{Binding VersionText}" Foreground="{StaticResource Accent}" FontWeight="SemiBold" FontSize="12"/>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- ============ content ============ -->
+        <Grid Grid.Row="1" Margin="16">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="282"/>
+                <ColumnDefinition Width="400"/>
+                <ColumnDefinition Width="16"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <Border Grid.Column="0" BorderBrush="LightGray" BorderThickness="0,0,1,0">
-                <ScrollViewer x:Name="TextureScrollViewer"
-                              HorizontalScrollBarVisibility="Disabled"
-                              VerticalScrollBarVisibility="Auto"
-                              PreviewMouseWheel="TextureScrollViewer_PreviewMouseWheel">
-                    <Image x:Name="TextureImage"
-                           Width="256" Height="256"
-                           Stretch="None"
-                           ContextMenuOpening="TextureImage_ContextMenuOpening">
-                        <Image.ContextMenu>
-                            <ContextMenu>
-                                <MenuItem x:Name="SaveTgaMenuItem" Header="Save TGA..." Click="SaveTga_Click"/>
-                                <MenuItem Header="Cancel"/>
-                            </ContextMenu>
-                        </Image.ContextMenu>
-                    </Image>
-                </ScrollViewer>
-            </Border>
+            <!-- left column -->
+            <Grid Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
 
-            <StackPanel Grid.Column="1" Margin="8">
-                <Button x:Name="LoadPrjButton"
-                        Content="Load TR2PRJ project..."
-                        Height="41" Margin="0,0,0,6"
-                        Click="LoadPrj_Click"
-                        IsEnabled="False"/>
-                <Button x:Name="UnloadPrjButton"
-                        Content="Unload TR2PRJ project"
-                        Height="41" Margin="0,0,0,6"
-                        Click="UnloadPrj_Click"
-                        IsEnabled="False"/>
-                <GroupBox Header="Copy from TR2PRJ" Margin="0,0,0,6">
-                    <StackPanel Margin="8">
-                        <CheckBox x:Name="CopyDoorsCheckBox"
-                                  Content="Doors"
-                                  Visibility="Collapsed"
-                                  IsEnabled="False"
-                                  ToolTip="May cause errors in geometry"/>
-                        <CheckBox x:Name="CopyTexturesCheckBox"
-                                  Content="Textures"
-                                  IsEnabled="False"
-                                  ToolTip="Some errors in NGLE"/>
-                        <CheckBox x:Name="CopyLightsCheckBox"
-                                  Content="Lights"
-                                  IsEnabled="False"/>
+                <!-- level -->
+                <Border Grid.Row="0" Style="{StaticResource Card}">
+                    <Grid>
+                        <!-- nothing opened yet -->
+                        <Grid Visibility="{Binding HasLevel, Converter={StaticResource InverseBoolToVisibility}}" MinHeight="150">
+                            <Rectangle RadiusX="10" RadiusY="10" StrokeThickness="1.5" StrokeDashArray="4 3" Fill="Transparent">
+                                <Rectangle.Style>
+                                    <Style TargetType="Rectangle">
+                                        <Setter Property="Stroke" Value="{StaticResource FieldBorder}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsDragOver}" Value="True">
+                                                <Setter Property="Stroke" Value="{StaticResource Accent}"/>
+                                                <Setter Property="Fill" Value="{StaticResource AccentSoft}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Rectangle.Style>
+                            </Rectangle>
+                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12">
+                                <TextBlock Text="Drop a level here" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="{StaticResource TextPrimary}"/>
+                                <TextBlock Text="Tomb Raider 4 (.tr4) or Tomb Raider 5 (.trc)" Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,3,0,12"/>
+                                <Button Content="Open level..." Command="{Binding OpenLevelCommand}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- level opened -->
+                        <StackPanel Visibility="{Binding HasLevel, Converter={StaticResource BoolToVisibility}}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding LevelName}" FontSize="18" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Foreground="{StaticResource TextPrimary}"/>
+                                <Border Grid.Column="1" Background="{StaticResource AccentSoft}" CornerRadius="10" Padding="9,2" Margin="10,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding LevelFormat}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/>
+                                </Border>
+                            </Grid>
+                            <TextBlock Text="{Binding LevelFolder}" ToolTip="{Binding LevelFolder}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+
+                            <ItemsControl ItemsSource="{Binding Stats}" Margin="0,10,0,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Columns="2"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,6,0,0">
+                                            <TextBlock Text="{Binding Label}" Style="{StaticResource Caption}"/>
+                                            <TextBlock Text="{Binding Value}" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                                <Button Content="Open another..." Command="{Binding OpenLevelCommand}" Style="{StaticResource SecondaryButton}"/>
+                                <Button Content="Close" Command="{Binding CloseLevelCommand}" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- export -->
+                <Border Grid.Row="1" Style="{StaticResource Card}" Margin="0,12,0,0">
+                    <StackPanel>
+                        <TextBlock Text="Export" Style="{StaticResource SectionTitle}"/>
+
+                        <StackPanel IsEnabled="{Binding CanEditOutput}" Margin="0,10,0,0">
+                            <TextBlock Text="Output folder" Style="{StaticResource Caption}"/>
+                            <Grid Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Text="{Binding OutputFolder, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FieldBox}"/>
+                                <Button Grid.Column="1" Content="Browse..." Command="{Binding BrowseOutputCommand}" Style="{StaticResource SecondaryButton}" Margin="8,0,0,0"/>
+                            </Grid>
+
+                            <TextBlock Text="Project name" Style="{StaticResource Caption}" Margin="0,10,0,0"/>
+                            <Grid Margin="0,4,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Text="{Binding OutputName, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource FieldBox}"/>
+                                <TextBlock Grid.Column="1" Text=".prj2" Style="{StaticResource Caption}" FontSize="13" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                            </Grid>
+
+                            <TextBlock Text="{Binding OutputSummary, StringFormat=Writes: {0}}" Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <Button Content="Export PRJ2" Command="{Binding ExportCommand}" Style="{StaticResource PrimaryButton}" Margin="0,14,0,0" Height="42"/>
+
+                        <StackPanel Margin="0,10,0,0" Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}">
+                            <ProgressBar Style="{StaticResource SlimProgress}" Minimum="0" Maximum="100" Value="{Binding Progress, Mode=OneWay}" IsIndeterminate="{Binding IsIndeterminate}"/>
+                            <TextBlock Text="{Binding BusyText}" Style="{StaticResource Caption}" Margin="0,5,0,0"/>
+                        </StackPanel>
+
+                        <Button Content="Show exported project in folder" Command="{Binding ShowInFolderCommand}" Style="{StaticResource SecondaryButton}" Margin="0,10,0,0"
+                                Visibility="{Binding HasExport, Converter={StaticResource BoolToVisibility}}"/>
                     </StackPanel>
-                </GroupBox>
-                <ProgressBar x:Name="LoadProgressBar"
-                             Height="23"
-                             Minimum="0" Maximum="100"
-                             Value="0"/>
-            </StackPanel>
+                </Border>
+
+                <!-- activity log -->
+                <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,12,0,0" Padding="18,14,18,12">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Grid>
+                            <TextBlock Text="Activity" Style="{StaticResource SectionTitle}" VerticalAlignment="Center"/>
+                            <Button Content="Clear" Command="{Binding ClearLogCommand}" Style="{StaticResource ToolButton}" HorizontalAlignment="Right"/>
+                        </Grid>
+                        <ListBox x:Name="LogList" Grid.Row="1" Margin="0,8,0,0" ItemsSource="{Binding LogEntries}" BorderThickness="0" Background="Transparent"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="0,3"/>
+                                    <Setter Property="Focusable" Value="False"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <ContentPresenter/>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="0,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="16"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Text="{Binding Level, Converter={StaticResource LogLevelGlyph}}" Foreground="{Binding Level, Converter={StaticResource LogLevelBrush}}" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Time}" Style="{StaticResource Caption}" Margin="4,1,8,0"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" Foreground="{StaticResource TextPrimary}" FontSize="12.5"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </Border>
+            </Grid>
+
+            <!-- texture preview -->
+            <Border Grid.Column="2" Style="{StaticResource Card}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center">
+                            <TextBlock Text="Texture atlas" Style="{StaticResource SectionTitle}"/>
+                            <TextBlock Text="{Binding TextureCaption}" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Button Content="&#8722;" Command="{Binding ZoomOutCommand}" Style="{StaticResource ToolButton}" ToolTip="Zoom out (Ctrl + wheel)"/>
+                            <TextBlock Text="{Binding ZoomText}" Style="{StaticResource Caption}" Width="46" TextAlignment="Center" VerticalAlignment="Center"/>
+                            <Button Content="+" Command="{Binding ZoomInCommand}" Style="{StaticResource ToolButton}" ToolTip="Zoom in (Ctrl + wheel)"/>
+                            <Button Content="100%" Command="{Binding ActualSizeCommand}" Style="{StaticResource ToolButton}" Margin="6,0,0,0"/>
+                            <Button Content="Fit" Click="FitButton_Click" Style="{StaticResource ToolButton}" Margin="6,0,0,0"/>
+                            <Button Content="Save TGA..." Command="{Binding SaveTgaCommand}" Style="{StaticResource SecondaryButton}" Margin="14,0,0,0" Padding="12,5"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <Border Grid.Row="1" Margin="0,12,0,0" Background="{StaticResource PreviewBackground}" CornerRadius="10" ClipToBounds="True">
+                        <Grid>
+                            <TextBlock Text="The texture atlas of the level appears here" Foreground="{StaticResource PreviewText}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Visibility="{Binding HasTexture, Converter={StaticResource InverseBoolToVisibility}}"/>
+                            <ScrollViewer x:Name="PreviewScroller" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                                          Visibility="{Binding HasTexture, Converter={StaticResource BoolToVisibility}}"
+                                          PreviewMouseWheel="PreviewScroller_PreviewMouseWheel">
+                                <Image x:Name="PreviewImage" Source="{Binding TextureSource}" Stretch="None" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="12"
+                                       RenderOptions.BitmapScalingMode="NearestNeighbor" SnapsToDevicePixels="True">
+                                    <Image.LayoutTransform>
+                                        <ScaleTransform ScaleX="{Binding Zoom}" ScaleY="{Binding Zoom}"/>
+                                    </Image.LayoutTransform>
+                                </Image>
+                            </ScrollViewer>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
         </Grid>
-    </DockPanel>
+
+        <!-- ============ status bar ============ -->
+        <Border Grid.Row="2" Background="White" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,1,0,0" Padding="24,7">
+            <Grid>
+                <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource TextPrimary}" FontSize="12.5" TextTrimming="CharacterEllipsis" Margin="0,0,260,0"/>
+                <TextBlock Text="Ctrl+O open    Ctrl+E export    drop a level anywhere" Style="{StaticResource Caption}" HorizontalAlignment="Right"/>
+            </Grid>
+        </Border>
+    </Grid>
 </Window>
