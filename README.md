@@ -14,7 +14,7 @@ Also this program is vibe-coded, so sorry for bad quality code
     - [ ] TR2
     - [ ] TR3
     - [x] TR4
-    - [ ] TRNG Levels
+    - [x] TRNG Levels
     - [x] TR5
     - [ ] TEN
 - [x] Add PRJ2 extraction.
