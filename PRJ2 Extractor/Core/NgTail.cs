@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 
 namespace PRJ2_Extractor.Core;
 
@@ -46,6 +46,25 @@ public sealed class NgTail
     }
 
     public NgChunk? Find(ushort type) => Chunks.FirstOrDefault(c => c.Type == type);
+
+    /// <summary>
+    /// Script IDs of static meshes (chunk 0x8021). The table is indexed by script ID and holds (room index, index of the
+    /// static inside that room); an index of -1 means the ID is not a static. Unlike 0x8005 this is unambiguous.
+    /// </summary>
+    public Dictionary<(int Room, int Index), uint> StaticScriptIds()
+    {
+        var result = new Dictionary<(int Room, int Index), uint>();
+        var chunk = Find(TagRemapStatics);
+        if (chunk == null) return result;
+        for (int id = 0; id < chunk.Data.Length / 2; id++)
+        {
+            short room = unchecked((short)chunk.Data[id * 2]);
+            short index = unchecked((short)chunk.Data[id * 2 + 1]);
+            if (index < 0) continue;
+            result.TryAdd((room, index), (uint)id);
+        }
+        return result;
+    }
 
     /// <summary>Returns the parsed tail, or null if the file has no (valid) NG tail.</summary>
     public static NgTail? TryRead(byte[] file)

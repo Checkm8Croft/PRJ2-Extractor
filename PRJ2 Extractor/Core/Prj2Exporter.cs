@@ -823,12 +823,16 @@ public static class Prj2Exporter
 
     private static void ExportStatics(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
     {
+        // TRNG script IDs of statics (chunk 0x8021), keyed by (room, index inside the room).
+        var scriptIds = trLevel.Ng?.StaticScriptIds() ?? [];
         for (int roomIdx = 0; roomIdx < trLevel.Rooms.Length && roomIdx < tombRooms.Length; roomIdx++)
         {
             var room = tombRooms[roomIdx];
             if (room == null) continue;
-            foreach (var s in trLevel.Rooms[roomIdx].Statics)
+            var statics = trLevel.Rooms[roomIdx].Statics;
+            for (int staticIdx = 0; staticIdx < statics.Count; staticIdx++)
             {
+                var s = statics[staticIdx];
                 var instance = new StaticInstance
                 {
                     WadObjectId = new WadStaticId(s.MeshId),
@@ -838,6 +842,8 @@ public static class Prj2Exporter
                     // Only TRNG levels keep an OCB there (TR5 stores a constant 1, vanilla TR4 stores 0).
                     Ocb = trLevel.Ng != null ? unchecked((short)s.Ocb) : (short)0,
                 };
+                if (scriptIds.TryGetValue((roomIdx, staticIdx), out uint scriptId))
+                    instance.ScriptId = scriptId; // set before AddObject so the level's script ID table picks it up
                 room.AddObject(room.Level, instance);
             }
         }

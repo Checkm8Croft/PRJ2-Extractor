@@ -1141,7 +1141,7 @@ public class TrLevel : IDisposable
                     Flags = br.ReadUInt16(),
                     Angle = br.ReadUInt16(),
                 });
-                br.ReadUInt16(); // unknown
+                br.ReadUInt16(); // box_number: filled in by the engine at load time (TRNG-CE AIOBJECT)
             }
         }
         catch (EndOfStreamException) { }
