@@ -956,6 +956,19 @@ Result: our export's ambient equals the reference's in **177 of 177 rooms** (bef
 it against, where subtracting 4 may be off by 4/128 (3% of the range) in every room.
 ---
 
+### 2.38 -- TRNG levels: encryption, NG tail, NG FloorData
+
+**Format.** A TRNG/NGLE `.tr4` is a normal TR4 followed by an appendix at EOF: the ASCII tag `NGLE` plus a uint32 with the header size; the header starts with the word `NG`, then chunks `[size][type][data]` (size in words, includes itself and type; bit 15 of the first word means a 31-bit size over two words and the type in the third). Verified on zoo.tr4, Venice.tr4, title.tr4 and against TombLib `Compilers/Ng.cs`. The TR4 body is untouched, which is why plain TR4 loading already worked.
+
+**Encrypted levels.** Signature `TR4c` (0x63345254) was rejected (result 3). `TombLib.NG.NgEncryption.DecryptLevel` decrypts to a temp file (deleted after loading); Venice (185 rooms) and title (1 room) now load.
+
+**FloorData.** In NG levels `FlipEffect` (9) and `ActionNg` (11) trigger actions carry an extra word, like Camera and Flyby. Treating them as 1 word read the extra word as an Object action: on Venice 35 phantom Object actions (= 29 + 6) and 1 phantom camera index (3 -> 2). The rule is applied only when the level has an NG tail and the 0x800D flags chunk has bit 0 (new triggers) set; on vanilla TR4 it would break parsing (Burial Chambers: 12 tiling mismatches).
+
+**Export.** Levels with an NG tail are exported with `GameVersion = TRNG`.
+
+**Regression.** alexhub2 harness unchanged (97.01%).
+
+**Open.** zoo.tr4 (older NGLE, no version chunk): 14 FloorData entries do not tile and actions 27/31 appear with both rules, cause unknown. `TypeStrength` (chunk 0x8009, byte 0 of each 8-byte room record) is non-zero in 11 (zoo) / 39 (Venice) rooms but no room has the Rain 0x0800 / Snow 0x0400 flags TombLib writes, so it is not mapped yet. Not implemented: ScriptIds (0x8005 / 0x8021), room remap (0x8037), NG animated textures (0x8002 / 0x8018).
 ## Key structural lessons (apply to future work on this codebase)
 
 - **TombLib local source is authoritative.** For any format question, find what TombLib's *compiler* writes (PRJ2→TR4) and invert it, rather than guessing from TRosettaStone/trview alone (though both are good secondary checks, and TRosettaStone caught the real bump-mapping mechanism in 2.5).

@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using System.IO;
 using PRJ2_Extractor.Models;
 using TombLib;
@@ -49,6 +49,9 @@ public static class Prj2Exporter
         trLevel.MakeDoors(p, tr2PrjLinks: false);
 
         var level = new Level();
+        // Levels with a TRNG/NGLE tail are exported as TRNG projects (NG triggers, script IDs); everything else stays TR4.
+        if (trLevel.Ng != null)
+            level.Settings.GameVersion = TRVersion.Game.TRNG;
         // Needed before MakeRelative/MakeAbsolute calls below (texture registration) -- mirrors
         // PrjLoader's own "level.Settings.LevelFilePath = ..." setup at the start of LoadFromPrj.
         level.Settings.LevelFilePath = prj2FilePath;

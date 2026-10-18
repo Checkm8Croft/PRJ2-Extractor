@@ -21,7 +21,7 @@ public sealed class LevelSession : IDisposable
     public TrLevel Level { get; }
     public string FilePath { get; }
     public bool IsTr5 { get; }
-    public string FormatName => IsTr5 ? "Tomb Raider 5" : "Tomb Raider 4";
+    public string FormatName => IsTr5 ? "Tomb Raider 5" : Level.Ng != null ? "Tomb Raider 4 (TRNG)" : "Tomb Raider 4";
     public IReadOnlyList<LevelStat> Stats { get; }
 
     private LevelSession(TrLevel level, string filePath)
