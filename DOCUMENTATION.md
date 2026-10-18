@@ -973,6 +973,21 @@ it against, where subtracting 4 may be off by 4/128 (3% of the range) in every r
 - *Chunk 0x8009 byte 0 (`TypeStrength`)*: non-zero in 11 (zoo) / 39 (Venice) rooms, but no room has the NGLE Rain 0x0400 / Snow 0x0800 / Cold 0x1000 flags (TRosettaStone 3.4.6 agrees on these bits). In Venice 34 of the 39 are water rooms, so in NGLE-compiled levels the byte is not rain/snow strength (interpretation). It only makes sense together with a room type, and the exporter does not export room flags at all (water, horizon, outside, NL, caustics, reflectivity, reverb), so nothing is mapped.
 - *ScriptIds (0x8005)*: not recoverable. The table stores a bare short that is an item index, a Cameras[] index (camera or sink) or a flyby Sequence depending on the object, with no type, so the same value is ambiguous (Ng.cs `WriteNgChunkMoveablesTable`); items are not parsed and flyby sequences are not unique. 0x8021 (statics) would be recoverable, but statics are not exported.
 - *Not implemented / out of scope*: room remap (0x8037), NG animated textures (0x8002/0x8018): the exporter has no animated textures at all.
+### 2.39 -- Objects (moveables, AI objects, statics) without the WAD
+
+Exported as `MoveableInstance` / `StaticInstance` carrying only the slot ID (`new WadMoveableId(id)` / `new WadStaticId(id)`); no WAD is extracted (that is Lara Extractor's job), so Tomb Editor shows the "?" placeholder until a WAD with the same slots is loaded. TR4 and TR5, same code path.
+
+**Sources.** Items (tr4_entity, 24 bytes) and AI objects (tr4_ai_object, 24 bytes, the last word unknown) follow the object textures, each behind a uint32 count. Room statics (20 bytes) are inside each room: TR4 has a uint16 count in front, TR5 takes the count from the room header. All were skipped before.
+
+**Mapping (inverse of TombLib `LevelCompilerClassicTR.PrepareItems` and `Rooms.cs`).**
+- Position = (X - room.X, -Y - room.Position.Y, Z - room.Z), same convention as lights, sinks and cameras.
+- Rotation = Angle * 360 / 65536.
+- Moveable flags: code bits = (Flags >> 9) & 0x1F, 0x100 invisible, 0x80 clear body. AI objects: code bits = (Flags >> 1) & 0x1F. AI objects are ordinary moveables in TombLib (separate array only in the compiled file).
+- Colour: 5-5-5 packed value / 16 with R and B swapped (the compiler swaps them for TR3+); moveables with 0xFFFF are untinted (Vector3.One).
+- Static OCB lives in the Intensity2 field only for TRNG levels (TR5 stores a constant 1, vanilla TR4 stores 0), so it is read only when the level has an NG tail.
+- Items and AI objects are added in file order. TombLib recompiles items room by room, so the item indices of a recompiled level can differ from the original; nothing here references item indices (triggers are not exported).
+
+**Verification.** `alexhub2_orig.prj2` has no objects, so it is not usable as ground truth. Instead, after re-loading the exported prj2 with `Prj2Loader`, the multiset (type, world X, Y, Z) of exported instances equals the file's items + AI objects and statics exactly on alexhub2 (98 / 73), Burial Chambers (240 / 136), zoo (288 / 195), Venice (130 / 163), TR5 Streets of Rome (153 / 255) and Trajan's Markets (151 / 67). Every item and static lies inside its own room's XZ box; one Venice item is more than 512 units outside its room's Y range. Item flags seen in the data: 0x0000, 0x0100, 0x3C00, 0x3E00 (clear body 0x80 never occurs, so that bit is unverified). PrjDiag unchanged (97.01%).
 ## Key structural lessons (apply to future work on this codebase)
 
 - **TombLib local source is authoritative.** For any format question, find what TombLib's *compiler* writes (PRJ2→TR4) and invert it, rather than guessing from TRosettaStone/trview alone (though both are good secondary checks, and TRosettaStone caught the real bump-mapping mechanism in 2.5).
