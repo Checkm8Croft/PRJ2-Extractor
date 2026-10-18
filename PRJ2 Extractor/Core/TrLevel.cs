@@ -28,6 +28,9 @@ public class TrLevel : IDisposable
     public HashSet<int> CameraFloorDataIndices = [];
     public HashSet<int> SinkFloorDataIndices = [];
     public ushort[] FloorData = [];
+    /// <summary>Moveable instances and AI objects, in file order. Statics are per room (LevelRoom.Statics).</summary>
+    public List<LevelItem> Items = [];
+    public List<LevelAiObject> AiObjects = [];
     /// <summary>TRNG/NGLE tail of the .tr4 (null for vanilla TR4 and TR5).</summary>
     public NgTail? Ng;
     /// <summary>True when FloorData uses the NG trigger encoding (FlipEffect / ActionNg carry an extra word).</summary>
@@ -360,7 +363,8 @@ public class TrLevel : IDisposable
                 for (int li = 0; li < lightCount; li++)
                     r.Lights.Add(ReadLight(br2));
                 ushort staticCount = br2.ReadUInt16();
-                geometry.Seek(staticCount * 20, SeekOrigin.Current);
+                for (int si = 0; si < staticCount; si++)
+                    r.Statics.Add(ReadStatic(br2));
                 r.AltRoom = br2.ReadInt16();
                 r.Flags = br2.ReadUInt16();
                 r.WaterScheme = br2.ReadByte();
@@ -475,6 +479,7 @@ public class TrLevel : IDisposable
             ObjectTextures = new ObjectTexture[size];
             for (int i = 0; i < ObjectTextures.Length; i++)
                 ObjectTextures[i] = ReadObjectTexture(br2);
+            ReadObjects(br2);
             progress?.Report(100);
         }
         finally
@@ -733,6 +738,7 @@ public class TrLevel : IDisposable
             ObjectTextures = new ObjectTexture[size];
             for (int i = 0; i < ObjectTextures.Length; i++)
                 ObjectTextures[i] = ReadObjectTexture(br, isTr5: true);
+            ReadObjects(br);
 
             progress?.Report(100);
         }
@@ -948,7 +954,8 @@ public class TrLevel : IDisposable
         stream.Position = dataStart + endPortalOffset;
         // tr3_room_staticmesh (20 bytes); count comes from the header (no inline uint16 count
         // prefix here, unlike TR4's read_room_static_meshes).
-        stream.Seek(numStaticMeshes * 20, SeekOrigin.Current);
+        for (int si = 0; si < numStaticMeshes; si++)
+            r.Statics.Add(ReadStatic(br));
 
         stream.Position = dataStart + layerOffset;
         var layerNumVertices = new ushort[numLayers];
@@ -1080,6 +1087,64 @@ public class TrLevel : IDisposable
             face.Vertices[i] = br.ReadUInt16();
         face.Texture = br.ReadUInt16();
         return face;
+    }
+
+    private static LevelStatic ReadStatic(BinaryReader br) => new()
+    {
+        X = br.ReadInt32(),
+        Y = br.ReadInt32(),
+        Z = br.ReadInt32(),
+        Rotation = br.ReadUInt16(),
+        Colour = br.ReadUInt16(),
+        Ocb = br.ReadUInt16(),
+        MeshId = br.ReadUInt16(),
+    };
+
+    /// <summary>
+    /// Items (tr4_entity) and AI objects (tr4_ai_object) follow the object textures, 24 bytes each with a uint32 count
+    /// in front (same layout in TR4 and TR5). A truncated tail is not fatal: the rooms and textures are already read.
+    /// </summary>
+    private void ReadObjects(BinaryReader br)
+    {
+        Items = [];
+        AiObjects = [];
+        try
+        {
+            uint count = br.ReadUInt32();
+            if (count > 100000) return; // not an item table: do not trust the rest
+            for (uint i = 0; i < count; i++)
+                Items.Add(new LevelItem
+                {
+                    TypeId = br.ReadUInt16(),
+                    Room = br.ReadInt16(),
+                    X = br.ReadInt32(),
+                    Y = br.ReadInt32(),
+                    Z = br.ReadInt32(),
+                    Angle = br.ReadUInt16(),
+                    Colour = br.ReadUInt16(),
+                    Ocb = br.ReadInt16(),
+                    Flags = br.ReadUInt16(),
+                });
+
+            count = br.ReadUInt32();
+            if (count > 100000) return;
+            for (uint i = 0; i < count; i++)
+            {
+                AiObjects.Add(new LevelAiObject
+                {
+                    TypeId = br.ReadUInt16(),
+                    Room = br.ReadUInt16(),
+                    X = br.ReadInt32(),
+                    Y = br.ReadInt32(),
+                    Z = br.ReadInt32(),
+                    Ocb = br.ReadInt16(),
+                    Flags = br.ReadUInt16(),
+                    Angle = br.ReadUInt16(),
+                });
+                br.ReadUInt16(); // box_number: filled in by the engine at load time (TRNG-CE AIOBJECT)
+            }
+        }
+        catch (EndOfStreamException) { }
     }
 
     private static ObjectTexture ReadObjectTexture(BinaryReader br, bool isTr5 = false)

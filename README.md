@@ -21,7 +21,7 @@ Also this program is vibe-coded, so sorry for bad quality code
 - [x] Write Geometry of rooms
 - [x] Add level elements (sound sources, light points, sinks, etc.)
 - [x] Assign Textures to rooms faces
-- [ ] Add objects from the level file 
+- [x] Add objects from the level file 
 - [ ] Place Triggers
 
 ## Credits
@@ -29,3 +29,4 @@ Also this program is vibe-coded, so sorry for bad quality code
 - sapper-trle: for the base of the program, since I based my program from his one: [TR42PRJ](https://github.com/sapper-trle/TR42PRJ)
 - TombEngine Team: for [TombLib](https://github.com/TombEngine/Tomb-Editor) used for writing PRJ2
 - LostArtefacts Team: for [TombIO](https://github.com/LostArtefacts/TombIO) that helped me a little bit
+- [TRNG-CE](https://github.com/TombNextGeneration/TRNGCommunityEdition) for TRNG

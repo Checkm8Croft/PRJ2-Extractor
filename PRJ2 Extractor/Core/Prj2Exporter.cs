@@ -3,6 +3,7 @@ using System.IO;
 using PRJ2_Extractor.Models;
 using TombLib;
 using TombLib.LevelData;
+using TombLib.Wad;
 using TombLib.LevelData.IO;
 using TombLib.LevelData.SectorEnums;
 using TombLib.LevelData.SectorStructs;
@@ -269,6 +270,9 @@ public static class Prj2Exporter
         ExportSinks(trLevel, tombRooms, warnings);
         ExportCameras(trLevel, tombRooms, warnings);
         ExportFlybyCameras(trLevel, tombRooms, warnings);
+        ExportStatics(trLevel, tombRooms, warnings);
+        ExportMoveables(trLevel, tombRooms, warnings);
+        ExportAiObjects(trLevel, tombRooms, warnings);
 
         // --- Pass 4: face textures ---
         // Must run after ALL rooms/portals are set up: IsFaceDefined/GetFaceShape below depend on
@@ -783,6 +787,106 @@ public static class Prj2Exporter
             ApplyDirection(flyby, dirX, dirY, dirZ);
 
             room.AddObject(room.Level, flyby);
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Objects. The WAD is never extracted here (Lara Extractor does that): instances only carry
+    // the object type ID, so Tomb Editor shows them as missing-WAD placeholders until a WAD with
+    // the same slots is loaded. Instances are added in file order.
+    // ------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Inverse of the TombLib compiler's PackColorTo16Bit (value * 16, 5 bits per channel). The compiler writes the
+    /// colour with R and B swapped for TR3+ moveables and statics, so the packed red bits are the instance's Z.
+    /// </summary>
+    private static Vector3 UnpackInstanceColor(ushort packed)
+    {
+        float r = ((packed >> 10) & 31) / 16.0f;
+        float g = ((packed >> 5) & 31) / 16.0f;
+        float b = (packed & 31) / 16.0f;
+        return new Vector3(b, g, r);
+    }
+
+    private static Room? RoomForObject(TrLevel trLevel, Room?[] tombRooms, int roomIdx, string what, List<string> warnings)
+    {
+        if (roomIdx < 0 || roomIdx >= tombRooms.Length || tombRooms[roomIdx] == null)
+        {
+            warnings.Add($"{what} skipped: invalid room {roomIdx}");
+            return null;
+        }
+        return tombRooms[roomIdx];
+    }
+
+    private static Vector3 ObjectPosition(TrLevel trLevel, Room room, int roomIdx, int x, int y, int z)
+        => new(x - trLevel.Rooms[roomIdx].X, -y - room.Position.Y, z - trLevel.Rooms[roomIdx].Z);
+
+    private static void ExportStatics(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    {
+        // TRNG script IDs of statics (chunk 0x8021), keyed by (room, index inside the room).
+        var scriptIds = trLevel.Ng?.StaticScriptIds() ?? [];
+        for (int roomIdx = 0; roomIdx < trLevel.Rooms.Length && roomIdx < tombRooms.Length; roomIdx++)
+        {
+            var room = tombRooms[roomIdx];
+            if (room == null) continue;
+            var statics = trLevel.Rooms[roomIdx].Statics;
+            for (int staticIdx = 0; staticIdx < statics.Count; staticIdx++)
+            {
+                var s = statics[staticIdx];
+                var instance = new StaticInstance
+                {
+                    WadObjectId = new WadStaticId(s.MeshId),
+                    Position = ObjectPosition(trLevel, room, roomIdx, s.X, s.Y, s.Z),
+                    RotationY = s.Rotation * (360.0f / 65536.0f),
+                    Color = UnpackInstanceColor(s.Colour),
+                    // Only TRNG levels keep an OCB there (TR5 stores a constant 1, vanilla TR4 stores 0).
+                    Ocb = trLevel.Ng != null ? unchecked((short)s.Ocb) : (short)0,
+                };
+                if (scriptIds.TryGetValue((roomIdx, staticIdx), out uint scriptId))
+                    instance.ScriptId = scriptId; // set before AddObject so the level's script ID table picks it up
+                room.AddObject(room.Level, instance);
+            }
+        }
+    }
+
+    private static void ExportMoveables(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    {
+        foreach (var item in trLevel.Items)
+        {
+            var room = RoomForObject(trLevel, tombRooms, item.Room, $"Moveable (ID {item.TypeId}) at ({item.X},{item.Y},{item.Z})", warnings);
+            if (room == null) continue;
+            var instance = new MoveableInstance
+            {
+                WadObjectId = new WadMoveableId(item.TypeId),
+                Position = ObjectPosition(trLevel, room, item.Room, item.X, item.Y, item.Z),
+                RotationY = item.Angle * (360.0f / 65536.0f),
+                Ocb = item.Ocb,
+                // Flags layout is the TombLib compiler's: code bits << 9, 0x80 clear body, 0x100 invisible.
+                CodeBits = (byte)((item.Flags >> 9) & 0x1F),
+                ClearBody = (item.Flags & 0x80) != 0,
+                Invisible = (item.Flags & 0x100) != 0,
+                Color = item.Colour == 0xFFFF ? Vector3.One : UnpackInstanceColor(item.Colour),
+            };
+            room.AddObject(room.Level, instance);
+        }
+    }
+
+    /// <summary>AI objects (and Lara's start position) live in their own array in the file but are ordinary moveables in TombLib.</summary>
+    private static void ExportAiObjects(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    {
+        foreach (var ai in trLevel.AiObjects)
+        {
+            var room = RoomForObject(trLevel, tombRooms, ai.Room, $"AI object (ID {ai.TypeId}) at ({ai.X},{ai.Y},{ai.Z})", warnings);
+            if (room == null) continue;
+            var instance = new MoveableInstance
+            {
+                WadObjectId = new WadMoveableId(ai.TypeId),
+                Position = ObjectPosition(trLevel, room, ai.Room, ai.X, ai.Y, ai.Z),
+                RotationY = ai.Angle * (360.0f / 65536.0f),
+                Ocb = ai.Ocb,
+                CodeBits = (byte)((ai.Flags >> 1) & 0x1F),
+            };
+            room.AddObject(room.Level, instance);
         }
     }
 

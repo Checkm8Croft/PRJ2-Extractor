@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 
 namespace PRJ2_Extractor.Models;
 
@@ -99,6 +99,40 @@ public class LevelRoom
     public bool IsFlipRoom;
     public short OriginalRoom = -1;
     public List<LevelLight> Lights = [];
+    public List<LevelStatic> Statics = [];
+}
+
+/// <summary>Raw tr_room_staticmesh (20 bytes): absolute world position (Y down-positive), TR4/TR5 layout.</summary>
+public class LevelStatic
+{
+    public int X, Y, Z;
+    public ushort Rotation;   // 65536 = 360 degrees
+    public ushort Colour;     // 5-5-5 packed, 0xFFFF / 0x4210 style
+    public ushort Ocb;        // "Intensity2": TRNG reuses it as the static OCB; TR5 forces it to 1
+    public ushort MeshId;
+}
+
+/// <summary>Raw tr4_entity (24 bytes): a moveable instance. Coordinates are absolute world (Y down-positive).</summary>
+public class LevelItem
+{
+    public ushort TypeId;
+    public short Room;
+    public int X, Y, Z;
+    public ushort Angle;      // 65536 = 360 degrees
+    public ushort Colour;     // Intensity1, 0xFFFF = untinted
+    public short Ocb;
+    public ushort Flags;      // bits 9-13 code bits, 0x100 invisible, 0x80 clear body (TombLib compiler layout)
+}
+
+/// <summary>Raw tr4_ai_object (24 bytes): AI marker / Lara start position, stored apart from the items.</summary>
+public class LevelAiObject
+{
+    public ushort TypeId;
+    public ushort Room;
+    public int X, Y, Z;
+    public short Ocb;
+    public ushort Flags;      // code bits << 1
+    public ushort Angle;      // 65536 = 360 degrees
 }
 
 public class LevelLight
