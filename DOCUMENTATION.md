@@ -956,6 +956,23 @@ Result: our export's ambient equals the reference's in **177 of 177 rooms** (bef
 it against, where subtracting 4 may be off by 4/128 (3% of the range) in every room.
 ---
 
+### 2.38 -- TRNG levels: encryption, NG tail, NG FloorData
+
+**Format.** A TRNG/NGLE `.tr4` is a normal TR4 followed by an appendix at EOF: the ASCII tag `NGLE` plus a uint32 with the header size; the header starts with the word `NG`, then chunks `[size][type][data]` (size in words, includes itself and type; bit 15 of the first word means a 31-bit size over two words and the type in the third). Verified on zoo.tr4, Venice.tr4, title.tr4 and against TombLib `Compilers/Ng.cs`. The TR4 body is untouched, which is why plain TR4 loading already worked.
+
+**Encrypted levels.** Signature `TR4c` (0x63345254) was rejected (result 3). `TombLib.NG.NgEncryption.DecryptLevel` decrypts to a temp file (deleted after loading); Venice (185 rooms) and title (1 room) now load. DecryptLevel returns true even with a wrong key, so the result is validated: each of the 4 compressed chunks must start with a valid zlib header (TrLevel.DecryptedChunksLookValid); otherwise Load returns 3. Checked: encrypted Venice/title fail the check, decrypted Venice/title and plain alexhub2/zoo pass. TRNG-CE has no level decryption code (only an XOR 0xA5 for script strings).
+
+**FloorData.** In NG levels `FlipEffect` (9) and `ActionNg` (11) trigger actions carry an extra word, like Camera and Flyby. Treating them as 1 word read the extra word as an Object action: on Venice 35 phantom Object actions (= 29 + 6) and 1 phantom camera index (3 -> 2). The rule is applied only when the level has an NG tail and the 0x800D flags chunk has bit 0 (new triggers) set; on vanilla TR4 it would break parsing (Burial Chambers: 12 tiling mismatches).
+
+**Export.** Levels with an NG tail are exported with `GameVersion = TRNG`.
+
+**Regression.** alexhub2 harness unchanged (97.01%).
+
+**Open items, investigated.**
+- *zoo.tr4 FloorData*: the 14 non-tiling entries (3885 total) all contain a trigger action of type 27 (`0xEFFF`) or 31 (`0xFFFF`, param 0x3FF, end bit set) followed by 1 to 5 extra words (`8305`, `030B 0419 8000`, `010A 000D 243E 0000 A016`, ...). TombLib has no such encoding (its NG actions are 0..17), so it is an older NGLE inline block whose length rule is not known (a "stop at the first word with bit 15" rule fits 7 of 8 samples; the `FFFF 0411 0000 FFFF FFFF FFFF` case does not). Harmless for extraction: sectors are parsed from their own FdIndex, the sentinel ends the action list and is neither Camera nor Sink.
+- *Chunk 0x8009 byte 0 (`TypeStrength`)*: non-zero in 11 (zoo) / 39 (Venice) rooms, but no room has the NGLE Rain 0x0400 / Snow 0x0800 / Cold 0x1000 flags (TRosettaStone 3.4.6 agrees on these bits). In Venice 34 of the 39 are water rooms, so in NGLE-compiled levels the byte is not rain/snow strength (interpretation). It only makes sense together with a room type, and the exporter does not export room flags at all (water, horizon, outside, NL, caustics, reflectivity, reverb), so nothing is mapped.
+- *ScriptIds (0x8005)*: not recoverable. The table stores a bare short that is an item index, a Cameras[] index (camera or sink) or a flyby Sequence depending on the object, with no type, so the same value is ambiguous (Ng.cs `WriteNgChunkMoveablesTable`); items are not parsed and flyby sequences are not unique. 0x8021 (statics) would be recoverable, but statics are not exported.
+- *Not implemented / out of scope*: room remap (0x8037), NG animated textures (0x8002/0x8018): the exporter has no animated textures at all.
 ## Key structural lessons (apply to future work on this codebase)
 
 - **TombLib local source is authoritative.** For any format question, find what TombLib's *compiler* writes (PRJ2→TR4) and invert it, rather than guessing from TRosettaStone/trview alone (though both are good secondary checks, and TRosettaStone caught the real bump-mapping mechanism in 2.5).

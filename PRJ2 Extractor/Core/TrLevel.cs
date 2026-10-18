@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Windows;
@@ -28,6 +28,10 @@ public class TrLevel : IDisposable
     public HashSet<int> CameraFloorDataIndices = [];
     public HashSet<int> SinkFloorDataIndices = [];
     public ushort[] FloorData = [];
+    /// <summary>TRNG/NGLE tail of the .tr4 (null for vanilla TR4 and TR5).</summary>
+    public NgTail? Ng;
+    /// <summary>True when FloorData uses the NG trigger encoding (FlipEffect / ActionNg carry an extra word).</summary>
+    public bool IsNg => Ng?.UsesNgTriggers == true;
     public LevelRoom[] Rooms = [];
     public LevelBox[] Boxes = [];
     public ObjectTexture[] ObjectTextures = [];
@@ -93,7 +97,7 @@ public class TrLevel : IDisposable
                     {
                         SinkFloorDataIndices.Add(parameter);
                     }
-                    else if (trigAction == 0x0C) // Flyby: also has one extra word
+                    else if (trigAction == 0x0C || (IsNg && (trigAction == 0x09 || trigAction == 0x0B))) // Flyby, and in NG levels FlipEffect (9) / ActionNg (11): also one extra word
                     {
                         data = FloorData[fdIndex + k];
                         k++;
@@ -122,7 +126,66 @@ public class TrLevel : IDisposable
         }
     }
 
+    /// <summary>
+    /// Loads a .tr4/.trc. TRNG-encrypted levels (signature "TR4c") are decrypted with TombLib's NgEncryption into a temporary
+    /// file, which is read and then deleted; the original file is never touched.
+    /// </summary>
     public byte Load(string filename, IProgress<int>? progress = null)
+    {
+        string? temp = null;
+        try
+        {
+            if (File.Exists(filename) && !filename.EndsWith(".trc", StringComparison.OrdinalIgnoreCase))
+            {
+                uint sig = 0;
+                using (var fs = File.OpenRead(filename))
+                    if (fs.Length >= 4) sig = new BinaryReader(fs).ReadUInt32();
+                if (sig == Tr4Encrypted)
+                {
+                    temp = Path.Combine(Path.GetTempPath(), "prj2x_" + Guid.NewGuid().ToString("N") + ".tr4");
+                    bool ok;
+                    try { ok = TombLib.NG.NgEncryption.DecryptLevel(filename, temp); }
+                    catch (Exception) { ok = false; }
+                    if (!ok || !DecryptedChunksLookValid(temp)) return 3;
+                    filename = temp;
+                }
+            }
+            return LoadCore(filename, progress);
+        }
+        finally
+        {
+            if (temp != null) { try { File.Delete(temp); } catch (IOException) { } }
+        }
+    }
+
+    /// <summary>
+    /// NgEncryption.DecryptLevel reports success even with a wrong key/variant. A correct decryption leaves a valid zlib header
+    /// (CM = 8, FCHECK) at the start of each of the 4 compressed chunks, which follow the 10-byte header as
+    /// [uncompressed size][compressed size][data].
+    /// </summary>
+    public static bool DecryptedChunksLookValid(string path)
+    {
+        try
+        {
+            using var fs = File.OpenRead(path);
+            using var br = new BinaryReader(fs);
+            long pos = 10;
+            for (int chunk = 0; chunk < 4; chunk++)
+            {
+                if (pos + 10 > fs.Length) return false;
+                fs.Seek(pos, SeekOrigin.Begin);
+                br.ReadUInt32();                  // uncompressed size
+                uint compressed = br.ReadUInt32();
+                int cmf = br.ReadByte(), flg = br.ReadByte();
+                if ((cmf & 0x0F) != 8 || ((cmf << 8) | flg) % 31 != 0) return false;
+                pos += 8 + (long)compressed;
+            }
+            return true;
+        }
+        catch (IOException) { return false; }
+    }
+
+    private byte LoadCore(string filename, IProgress<int>? progress)
     {
         progress?.Report(0);
         uint version = 0;
@@ -160,7 +223,9 @@ public class TrLevel : IDisposable
             return r5;
         }
 
-        var memfile = new MemoryStream(File.ReadAllBytes(filename));
+        var fileBytes = File.ReadAllBytes(filename);
+        Ng = NgTail.TryRead(fileBytes);
+        var memfile = new MemoryStream(fileBytes);
         try
         {
             using var br = new BinaryReader(memfile, Encoding.UTF8, leaveOpen: true);
