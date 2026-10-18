@@ -81,20 +81,24 @@ public class TrLevel : IDisposable
             }
             else if (fd.Tipo == FloorType.Trigger)
             {
-                bool isFirst = true;
+                var trig = new TrTrigger { SubFunction = sub };
+                if (fdIndex + k >= NumFloorData) break;
+                trig.Setup = FloorData[fdIndex + k]; // TriggerSetup word, not an ActionList entry; its bit 15 is NOT the end flag
+                k++;
                 do
                 {
+                    if (fdIndex + k >= NumFloorData) break;
                     data = FloorData[fdIndex + k];
                     k++;
-                    if (isFirst) { isFirst = false; continue; } // TriggerSetup word, not an ActionList entry
 
                     int trigAction = (data & 0x7C00) >> 10;
                     int parameter = data & 0x03FF;
+                    var action = new TrTriggerAction { Type = trigAction, Param = (ushort)parameter };
+                    bool extraWord = false;
                     if (trigAction == 0x01) // Camera: uses Parameter as Cameras[] index, plus one extra word
                     {
                         CameraFloorDataIndices.Add(parameter & 0x7F);
-                        data = FloorData[fdIndex + k]; // the end/cont bit for 2-word actions lives here, not on the entry word above
-                        k++;
+                        extraWord = true; // the end/cont bit for 2-word actions lives on the extra word, not on the entry word above
                     }
                     else if (trigAction == 0x02) // Underwater Current (Sink): Parameter is Cameras[] index
                     {
@@ -102,10 +106,20 @@ public class TrLevel : IDisposable
                     }
                     else if (trigAction == 0x0C || (IsNg && (trigAction == 0x09 || trigAction == 0x0B))) // Flyby, and in NG levels FlipEffect (9) / ActionNg (11): also one extra word
                     {
+                        extraWord = true;
+                    }
+                    if (extraWord && fdIndex + k < NumFloorData)
+                    {
                         data = FloorData[fdIndex + k];
                         k++;
+                        action.HasExtra = true;
+                        action.Extra = data;
                     }
+                    trig.Actions.Add(action);
                 } while ((data & 0x8000) != 0x8000);
+                if (trig.Actions.Count > 0 && trig.Actions[^1].HasExtra)
+                    trig.Actions[^1].Extra &= 0x7FFF; // end-of-list flag
+                fd.Trigger = trig;
             }
             else if (fd.Tipo == FloorType.Climb)
             {
