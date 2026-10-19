@@ -22,7 +22,7 @@ Also this program is vibe-coded, so sorry for bad quality code
 - [x] Add level elements (sound sources, light points, sinks, etc.)
 - [x] Assign Textures to rooms faces
 - [x] Add objects from the level file 
-- [ ] Place Triggers
+- [x] Place Triggers
 
 ## Credits
 

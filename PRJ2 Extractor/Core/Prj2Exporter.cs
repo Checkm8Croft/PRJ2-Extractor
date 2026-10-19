@@ -267,12 +267,15 @@ public static class Prj2Exporter
         }
 
         ExportSoundSources(trLevel, tombRooms, warnings);
-        ExportSinks(trLevel, tombRooms, warnings);
-        ExportCameras(trLevel, tombRooms, warnings);
-        ExportFlybyCameras(trLevel, tombRooms, warnings);
+        var registry = new ObjectRegistry();
+        ExportSinks(trLevel, tombRooms, registry, warnings);
+        ExportCameras(trLevel, tombRooms, registry, warnings);
+        ExportFlybyCameras(trLevel, tombRooms, registry, warnings);
         ExportStatics(trLevel, tombRooms, warnings);
-        ExportMoveables(trLevel, tombRooms, warnings);
+        ExportMoveables(trLevel, tombRooms, registry, warnings);
         ExportAiObjects(trLevel, tombRooms, warnings);
+        // Triggers last: their targets are the objects exported above.
+        TriggerExporter.Export(trLevel, tombRooms, registry, warnings);
 
         // --- Pass 4: face textures ---
         // Must run after ALL rooms/portals are set up: IsFaceDefined/GetFaceShape below depend on
@@ -682,7 +685,7 @@ public static class Prj2Exporter
     /// to hold a pathfinding box index -- see LevelCompilerClassicTR.cs's sink-writing code, which
     /// this inverts. The containing room itself must be found by position, same as sound sources.
     /// </summary>
-    private static void ExportSinks(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    private static void ExportSinks(TrLevel trLevel, Room?[] tombRooms, ObjectRegistry registry, List<string> warnings)
     {
         foreach (int idx in trLevel.SinkFloorDataIndices)
         {
@@ -707,6 +710,7 @@ public static class Prj2Exporter
                 Strength = (short)(c.Room - 1),
             };
             room.AddObject(room.Level, sink);
+            registry.Sinks[idx] = sink;
         }
     }
 
@@ -715,7 +719,7 @@ public static class Prj2Exporter
     /// Trigger FloorData (TrigAction 0x01) during TrLevel.Load. Unlike sinks, tr_camera's Room field
     /// is a genuine room index for camera entries, so no position-based search is needed.
     /// </summary>
-    private static void ExportCameras(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    private static void ExportCameras(TrLevel trLevel, Room?[] tombRooms, ObjectRegistry registry, List<string> warnings)
     {
         foreach (int idx in trLevel.CameraFloorDataIndices)
         {
@@ -742,6 +746,7 @@ public static class Prj2Exporter
                 GlideOut = (c.Flags & 0x4) != 0,
             };
             room.AddObject(room.Level, camera);
+            registry.Cameras[idx] = camera;
         }
     }
 
@@ -749,7 +754,7 @@ public static class Prj2Exporter
     /// Flyby cameras, from the raw tr4_flyby_camera array. Unlike static cameras, Room is a genuine
     /// direct room index here too, so no position search is needed.
     /// </summary>
-    private static void ExportFlybyCameras(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    private static void ExportFlybyCameras(TrLevel trLevel, Room?[] tombRooms, ObjectRegistry registry, List<string> warnings)
     {
         foreach (var c in trLevel.FlybyCameras)
         {
@@ -787,6 +792,7 @@ public static class Prj2Exporter
             ApplyDirection(flyby, dirX, dirY, dirZ);
 
             room.AddObject(room.Level, flyby);
+            registry.FlybyBySequence.TryAdd(c.Sequence, flyby);
         }
     }
 
@@ -849,10 +855,11 @@ public static class Prj2Exporter
         }
     }
 
-    private static void ExportMoveables(TrLevel trLevel, Room?[] tombRooms, List<string> warnings)
+    private static void ExportMoveables(TrLevel trLevel, Room?[] tombRooms, ObjectRegistry registry, List<string> warnings)
     {
-        foreach (var item in trLevel.Items)
+        for (int itemIdx = 0; itemIdx < trLevel.Items.Count; itemIdx++)
         {
+            var item = trLevel.Items[itemIdx];
             var room = RoomForObject(trLevel, tombRooms, item.Room, $"Moveable (ID {item.TypeId}) at ({item.X},{item.Y},{item.Z})", warnings);
             if (room == null) continue;
             var instance = new MoveableInstance
@@ -868,6 +875,7 @@ public static class Prj2Exporter
                 Color = item.Colour == 0xFFFF ? Vector3.One : UnpackInstanceColor(item.Colour),
             };
             room.AddObject(room.Level, instance);
+            registry.Items[itemIdx] = instance; // trigger actions refer to items by their index in the file
         }
     }
 

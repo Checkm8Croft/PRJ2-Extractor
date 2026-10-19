@@ -16,6 +16,25 @@ public class ParsedFloorData
     public bool N, S, E, W;
     public int TriHLo, TriHHi;
     public ushort[] Corners = new ushort[4];
+    /// <summary>Raw trigger (FloorType.Trigger only): the trigger sub-function, setup word and action list.</summary>
+    public TrTrigger? Trigger;
+}
+
+/// <summary>One entry of a trigger's action list. Camera, Flyby and (in NG levels) FlipEffect / ActionNg carry an extra word.</summary>
+public class TrTriggerAction
+{
+    public int Type;            // bits 10-14 of the action word
+    public ushort Param;        // bits 0-9
+    public bool HasExtra;
+    public ushort Extra;        // the extra word, with the end-of-list bit stripped when it closes the list
+}
+
+/// <summary>A trigger function as stored in FloorData: [function word][setup word][actions...].</summary>
+public class TrTrigger
+{
+    public int SubFunction;     // trigger type (bits 8-14 of the function word)
+    public ushort Setup;        // timer / one-shot / code bits
+    public List<TrTriggerAction> Actions = [];
 }
 
 public class LevelSector

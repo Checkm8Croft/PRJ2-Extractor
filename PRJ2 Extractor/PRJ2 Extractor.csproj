@@ -15,6 +15,11 @@
     <Content Include="PRJ2.ico" />
   </ItemGroup>
 
+  <!-- TombLib's NG trigger catalog: needed to split the timer / extra of NG flipeffect and action triggers. -->
+  <ItemGroup Condition="Exists('C:\Tomb Editor\Catalogs\NgCatalog.xml')">
+    <None Include="C:\Tomb Editor\Catalogs\NgCatalog.xml" Link="Catalogs\NgCatalog.xml" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <Reference Include="TombLib">
       <HintPath>C:\Tomb Editor\TombLib.dll</HintPath>
