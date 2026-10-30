@@ -1007,6 +1007,17 @@ Exported as `TriggerInstance` (TR4, TRNG and TR5), inverse of the trigger part o
 - The camera / sink sets are unchanged and PrjDiag is unchanged (97.01%).
 
 **Not recovered.** Action types 27 and 31 (zoo 15, Venice 1, Burial Chambers 1) are skipped with a warning (see 2.38). A Moveable-target action whose number is a static's script ID (NG) is indistinguishable from an item index; numbers beyond the item count are skipped with a warning. When one CameraInstance is used by several triggers with different move timers the last one wins. In non-NG levels an action 11 (clear bodies) is mapped to ActionNg, which has no counterpart there; no sample level contains one.
+### 2.41 -- TombEngine levels (.ten): container and data layout
+
+Reader: `Core/TenLevel.cs` (not yet wired into the exporter). Source of truth: TombEngine `Specific/level.cpp` (`LoadLevel` and the `Load*` functions); the writer side is TombLib `Compilers/TombEngine` (`Structs.cs`, `FloorData.cs`).
+
+**Container.** 16-byte header (`TEN`, compiler version[4], system hash, level hash), then three blocks: media (texture atlases, samples), geometry, dynamic data. Each block is `[int64 uncompressed][int64 compressed]` followed by `[uint32 chunks]{[uint32 uncompressed][uint32 compressed][LZ4 block]}` (K4os.Compression.LZ4). Primitive types are little-endian; strings are LEB128-prefixed UTF-8 (same as `BinaryReader.ReadString`); bools are one byte.
+
+**Geometry block.** Rooms (position x/z, bottom/top height, vertex positions / colours / effects, texture buckets of quads and triangles with UVs, portals, size, sectors, lights), then the floordata words, then moveable models, sprites, boxes, mirrors, animated textures and material definitions (the last group is not read). Sectors carry trigger index, pathfinding box, material, stopper, and for floor and ceiling: split angle, two portal room numbers and two "fake planes" (x, y = tilt per block, z = height at the sector centre), plus the side portal and nine flags (death, monkey, four climbs, mark triggerer, mark beetle).
+
+**Dynamic block.** Per room: name, tags, ambient, flipped room, flags, mesh effect, reverb, flip number, statics (position, rotation, scale, flags, colour, slot, hit points, name) and trigger volumes; then items, AI objects, cameras, flyby cameras (with DOF), sinks, sound sources, materials, event sets (global, volume) and the property blob.
+
+**Verification.** palace.ten and venice.ten (The Emerald Vault, compiler 2.0.0) load in about 0.3 s each; the dynamic block is consumed to the last byte, which validates every field read there (palace: 13 rooms, 18 items, 49 statics; venice: 68 rooms, 147 items, 13 flybys, 231 statics). The geometry block cannot be checked to its end because only the room part is read. Both levels use floordata triggers (`TriggerIndex` + floordata) and no volumes.
 ## Key structural lessons (apply to future work on this codebase)
 
 - **TombLib local source is authoritative.** For any format question, find what TombLib's *compiler* writes (PRJ2→TR4) and invert it, rather than guessing from TRosettaStone/trview alone (though both are good secondary checks, and TRosettaStone caught the real bump-mapping mechanism in 2.5).
