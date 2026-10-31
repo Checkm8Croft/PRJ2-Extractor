@@ -347,6 +347,35 @@ public sealed class TenLevel
         for (int i = 0; i < floorDataCount; i++) FloorData[i] = r.ReadInt16();
     }
 
+    /// <summary>
+    /// Reads the trigger a sector points to (TriggerIndex into the floordata). Unlike TR floordata there is no function word:
+    /// [trigger type << 8][setup: timer, 0x100 one-shot, code bits << 9][actions...]. An action is [target type << 10 | parameter];
+    /// camera, flyby and event actions are followed by an extra word (timer / one-shot); bit 15 of the last word ends the list.
+    /// </summary>
+    public Models.TrTrigger? ReadTrigger(int index)
+    {
+        if (index < 0 || index + 2 >= FloorData.Length) return null;
+        var trigger = new Models.TrTrigger { SubFunction = (ushort)FloorData[index] >> 8, Setup = (ushort)FloorData[index + 1] };
+        int i = index + 2;
+        ushort last;
+        do
+        {
+            if (i >= FloorData.Length) break;
+            last = (ushort)FloorData[i++];
+            int type = (last >> 10) & 0x1F;
+            var action = new Models.TrTriggerAction { Type = type, Param = (ushort)(last & 0x03FF) };
+            if (type is 1 or 12 or 16 or 17)
+            {
+                if (i >= FloorData.Length) break;
+                last = (ushort)FloorData[i++];
+                action.HasExtra = true;
+                action.Extra = last;
+            }
+            trigger.Actions.Add(action);
+        } while ((last & 0x8000) == 0);
+        if (trigger.Actions.Count > 0 && trigger.Actions[^1].HasExtra) trigger.Actions[^1].Extra &= 0x7FFF;
+        return trigger.Actions.Count > 0 ? trigger : null;
+    }
     private static TenEvent ReadEvent(BinaryReader r) => new()
     {
         Type = r.ReadInt32(),

@@ -36,7 +36,13 @@ public static class TenExporter
         }
 
         AddPortals(level, ten, rooms, warnings);
-        TenObjects.Add(ten, rooms, warnings);
+        var registry = new ObjectRegistry();
+        TenObjects.Add(ten, rooms, registry, warnings);
+        // Triggers last: their targets are the objects added above.
+        TriggerExporter.ExportCore(rooms, ten.Rooms.Count,
+            i => (ten.Rooms[i].XSize, ten.Rooms[i].ZSize),
+            (i, x, z) => ten.ReadTrigger(ten.Rooms[i].Sectors[x * ten.Rooms[i].ZSize + z].TriggerIndex),
+            false, true, registry, warnings);
         return level;
     }
 

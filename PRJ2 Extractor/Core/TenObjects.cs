@@ -25,7 +25,7 @@ internal static class TenObjects
     private static Vector3 Local(Room room, int x, int y, int z)
         => new(x - room.Position.X * 1024, -y - room.Position.Y, z - room.Position.Z * 1024);
 
-    public static void Add(TenLevel ten, Room[] rooms, List<string> warnings)
+    public static void Add(TenLevel ten, Room[] rooms, ObjectRegistry registry, List<string> warnings)
     {
         for (int i = 0; i < ten.Rooms.Count; i++)
         {
@@ -90,6 +90,7 @@ internal static class TenObjects
                 LuaName = it.Name,
             };
             room.AddObject(room.Level, instance);
+            registry.Items[ten.Items.IndexOf(it)] = instance;
         }
 
         // AI objects are stored apart in the file but are ordinary moveables in TombLib.
@@ -124,6 +125,7 @@ internal static class TenObjects
             };
             if ((c.Flags & 0x0001) != 0) camera.CameraMode = CameraInstanceMode.Locked;
             room.AddObject(room.Level, camera);
+            registry.Cameras[ten.Cameras.IndexOf(c)] = camera;
         }
 
         foreach (var f in ten.FlybyCameras)
@@ -144,13 +146,16 @@ internal static class TenObjects
             // The file stores a point one sector ahead of the camera instead of its rotation.
             SetDirection(flyby, new Vector3(f.TargetX - f.X, -(f.TargetY - f.Y), f.TargetZ - f.Z) / 1024.0f);
             room.AddObject(room.Level, flyby);
+            registry.FlybyBySequence.TryAdd(f.Sequence, flyby);
         }
 
         foreach (var s in ten.Sinks)
         {
             var room = RoomAt(ten, rooms, s.X, s.Y, s.Z);
             if (room == null) { warnings.Add($"Sink '{s.Name}' skipped: no room contains it"); continue; }
-            room.AddObject(room.Level, new SinkInstance { Position = Local(room, s.X, s.Y, s.Z), Strength = (short)s.Strength, LuaName = s.Name });
+            var sink = new SinkInstance { Position = Local(room, s.X, s.Y, s.Z), Strength = (short)s.Strength, LuaName = s.Name };
+            room.AddObject(room.Level, sink);
+            registry.Sinks[ten.Sinks.IndexOf(s)] = sink;
         }
 
         foreach (var s in ten.SoundSources)
