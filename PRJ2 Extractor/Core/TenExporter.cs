@@ -36,6 +36,7 @@ public static class TenExporter
         }
 
         AddPortals(level, ten, rooms, warnings);
+        TenObjects.Add(ten, rooms, warnings);
         return level;
     }
 
