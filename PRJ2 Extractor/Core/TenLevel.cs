@@ -156,6 +156,13 @@ public sealed class TenEventSet
     public List<TenEvent> Events = [];
 }
 
+/// <summary>A room texture atlas as stored in the media block: PNG or DDS (BC1 / BC3) bytes of the colour map.</summary>
+public sealed class TenAtlas
+{
+    public int Width, Height;
+    public byte[] ColorMap = [];
+}
+
 public sealed class TenLevel
 {
     public byte[] Version = new byte[4];
@@ -175,6 +182,11 @@ public sealed class TenLevel
 
     /// <summary>Raw (decompressed) media block: texture atlases and samples. Not parsed yet.</summary>
     public byte[] MediaBlock = [];
+
+    /// <summary>Room texture atlases (the first group of the media block); polygon UVs of rooms are relative to these.</summary>
+    public List<TenAtlas> RoomAtlases = [];
+    /// <summary>Animated texture atlases; buckets flagged as animated refer to these.</summary>
+    public List<TenAtlas> AnimatedAtlases = [];
 
     public string VersionText => $"{Version[0]}.{Version[1]}.{Version[2]}";
 
@@ -205,6 +217,8 @@ public sealed class TenLevel
 
             progress?.Report(5);
             MediaBlock = ReadBlock(br);
+            using (var media = new BinaryReader(new MemoryStream(MediaBlock)))
+                ReadAtlases(media);
             progress?.Report(30);
 
             using (var geometry = new BinaryReader(new MemoryStream(ReadBlock(br))))
@@ -375,6 +389,40 @@ public sealed class TenLevel
         } while ((last & 0x8000) == 0);
         if (trigger.Actions.Count > 0 && trigger.Actions[^1].HasExtra) trigger.Actions[^1].Extra &= 0x7FFF;
         return trigger.Actions.Count > 0 ? trigger : null;
+    }
+    /// <summary>
+    /// Mirrors LoadTextures(): five groups (room, moveables, statics, animated, sprites) of [count]{ width, height, size, colour map, then
+    /// flag + blob for normal, ORSH and emissive maps }, followed by the sky. Room and animated atlases are kept; polygon UVs of rooms are
+    /// relative to them.
+    /// </summary>
+    private void ReadAtlases(BinaryReader r)
+    {
+        RoomAtlases = ReadAtlasGroup(r, true);
+        ReadAtlasGroup(r, false);   // moveables
+        ReadAtlasGroup(r, false);   // statics
+        AnimatedAtlases = ReadAtlasGroup(r, true);
+    }
+
+    private static List<TenAtlas> ReadAtlasGroup(BinaryReader r, bool keep)
+    {
+        int count = Count(r, 4096);
+        var list = new List<TenAtlas>(count);
+        for (int i = 0; i < count; i++)
+        {
+            var atlas = new TenAtlas { Width = r.ReadInt32(), Height = r.ReadInt32() };
+            int size = r.ReadInt32();
+            if (size < 0 || size > r.BaseStream.Length - r.BaseStream.Position) throw new InvalidDataException("Texture size is incorrect.");
+            if (keep) atlas.ColorMap = r.ReadBytes(size); else r.BaseStream.Seek(size, SeekOrigin.Current);
+            for (int map = 0; map < 3; map++)           // normal, ORSH, emissive
+            {
+                if (!r.ReadBoolean()) continue;
+                int mapSize = r.ReadInt32();
+                if (mapSize < 0 || mapSize > r.BaseStream.Length - r.BaseStream.Position) throw new InvalidDataException("Texture map size is incorrect.");
+                r.BaseStream.Seek(mapSize, SeekOrigin.Current);
+            }
+            if (keep) list.Add(atlas);
+        }
+        return list;
     }
     private static TenEvent ReadEvent(BinaryReader r) => new()
     {

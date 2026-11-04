@@ -11,7 +11,7 @@ namespace PRJ2_Extractor.Core;
 /// <summary>Converts a compiled TombEngine level (<see cref="TenLevel"/>) into a PRJ2 project: rooms, sectors, portals and room flags.</summary>
 public static class TenExporter
 {
-    public static Level BuildLevel(TenLevel ten, string prj2FilePath, List<string> warnings)
+    public static Level BuildLevel(TenLevel ten, string prj2FilePath, List<string> warnings, bool textures = true)
     {
         var level = new Level();
         level.Settings.GameVersion = TRVersion.Game.TombEngine;
@@ -43,6 +43,15 @@ public static class TenExporter
             i => (ten.Rooms[i].XSize, ten.Rooms[i].ZSize),
             (i, x, z) => ten.ReadTrigger(ten.Rooms[i].Sectors[x * ten.Rooms[i].ZSize + z].TriggerIndex),
             false, true, registry, warnings);
+
+        if (textures)
+        {
+            string dir = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(prj2FilePath)) ?? ".", Path.GetFileNameWithoutExtension(prj2FilePath) + "_textures");
+            var roomTextures = TenTextures.RegisterAtlases(level, ten.RoomAtlases, dir, "room", warnings);
+            var animatedTextures = TenTextures.RegisterAtlases(level, ten.AnimatedAtlases, dir, "animated", warnings);
+            var stats = TenTextures.Apply(ten, rooms, roomTextures, animatedTextures, warnings);
+            warnings.Add($"Info: {stats.FacesTextured} of {stats.Faces} room faces textured ({stats.FacesWithoutPolygon} faces have no polygon, {stats.PolygonsUnmatched} of {stats.Polygons} polygons matched no face, {stats.MissingAtlas} faces lack an atlas).");
+        }
         return level;
     }
 
@@ -153,11 +162,62 @@ public static class TenExporter
                     x0 = minX / 1024; x1 = maxX / 1024 - 1; z0 = minZ / 1024; z1 = maxZ / 1024 - 1; break;
             }
 
-            try { rooms[i].AddObject(level, new PortalInstance(new RectangleInt2(x0, z0, x1, z1), direction, rooms[target])); }
+            // A portal whose plane carries textured polygons is a portal with visible faces (traversable); the file has no flag for it.
+            var instance = new PortalInstance(new RectangleInt2(x0, z0, x1, z1), direction, rooms[target]);
+            if (HasPolygonsOn(ten.Rooms[i], portal)) instance.Opacity = PortalOpacity.TraversableFaces;
+            try
+            {
+                rooms[i].AddObject(level, instance);
+                // AddObject also made the mirrored portal in the adjoining room; its own side may carry textured faces too.
+                var opposite = Opposite(direction);
+                var mirror = rooms[target].Portals.FirstOrDefault(m => m.AdjoiningRoom == rooms[i] && m.Direction == opposite && m.Opacity == PortalOpacity.None);
+                var mirrorSource = ten.Rooms[target].Portals.FirstOrDefault(m => m.RoomNumber == i && Normal(m) == opposite);
+                if (mirror != null && mirrorSource != null && HasPolygonsOn(ten.Rooms[target], mirrorSource)) mirror.Opacity = PortalOpacity.TraversableFaces;
+            }
             catch (Exception ex) { warnings.Add($"Room {i}: portal to room {target} [{direction}] ({x0},{z0})-({x1},{z1}) skipped: {ex.Message}"); }
         }
     }
 
+    private static PortalDirection Opposite(PortalDirection d) => d switch
+    {
+        PortalDirection.Floor => PortalDirection.Ceiling,
+        PortalDirection.Ceiling => PortalDirection.Floor,
+        PortalDirection.WallNegativeX => PortalDirection.WallPositiveX,
+        PortalDirection.WallPositiveX => PortalDirection.WallNegativeX,
+        PortalDirection.WallNegativeZ => PortalDirection.WallPositiveZ,
+        _ => PortalDirection.WallNegativeZ,
+    };
+
+    private static PortalDirection? Normal(TenPortal p)
+    {
+        if (p.NormalY == 1) return PortalDirection.Ceiling;
+        if (p.NormalY == -1) return PortalDirection.Floor;
+        if (p.NormalZ == 1) return PortalDirection.WallNegativeZ;
+        if (p.NormalZ == -1) return PortalDirection.WallPositiveZ;
+        if (p.NormalX == 1) return PortalDirection.WallNegativeX;
+        if (p.NormalX == -1) return PortalDirection.WallPositiveX;
+        return null;
+    }
+    /// <summary>True when the room has a polygon lying on the portal's plane inside its extent (portal vertices sit one unit off the face).</summary>
+    private static bool HasPolygonsOn(TenRoom room, TenPortal portal)
+    {
+        var verts = Enumerable.Range(0, 4).Select(v => new Vector3(portal.Vertices[v * 3], portal.Vertices[v * 3 + 1], portal.Vertices[v * 3 + 2])).ToArray();
+        var normal = Vector3.Normalize(new Vector3(portal.NormalX, portal.NormalY, portal.NormalZ));
+        var min = new Vector3(verts.Min(v => v.X), verts.Min(v => v.Y), verts.Min(v => v.Z)) - Vector3.One * 3;
+        var max = new Vector3(verts.Max(v => v.X), verts.Max(v => v.Y), verts.Max(v => v.Z)) + Vector3.One * 3;
+        foreach (var bucket in room.Buckets)
+        foreach (var poly in bucket.Polygons)
+        {
+            bool onPlane = true;
+            foreach (int idx in poly.Indices)
+            {
+                var p = room.Positions[idx];
+                if (Math.Abs(Vector3.Dot(normal, p - verts[0])) > 3 || p.X < min.X || p.X > max.X || p.Y < min.Y || p.Y > max.Y || p.Z < min.Z || p.Z > max.Z) { onPlane = false; break; }
+            }
+            if (onPlane) return true;
+        }
+        return false;
+    }
     public static List<string> Export(TenLevel ten, string prj2FilePath)
     {
         var warnings = new List<string>();

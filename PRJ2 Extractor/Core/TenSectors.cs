@@ -57,6 +57,9 @@ internal static class TenSectors
             res.XnZp = Height(p, -HalfSector, HalfSector, roomY);
             res.XpZp = Height(p, HalfSector, HalfSector, roomY);
             res.Split = DiagonalSplit.None;
+            // A planar sector has no split in the file; the editor's default direction is X = Z, which also decides how TombLib lays out
+            // the quad's vertices (and with it how a texture is attached to the corners).
+            res.SplitDirectionIsXEqualsZ = true;
             return res;
         }
 
