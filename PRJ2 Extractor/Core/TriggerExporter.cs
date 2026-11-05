@@ -63,40 +63,53 @@ internal static class TriggerExporter
     public static void Export(TrLevel trLevel, Room?[] tombRooms, ObjectRegistry registry, List<string> warnings)
     {
         bool ng = trLevel.IsNg;
-        bool catalog = ng && EnsureNgCatalog();
+        ExportCore(tombRooms, trLevel.Rooms.Length,
+            roomIdx => (trLevel.Rooms[roomIdx].NumX, trLevel.Rooms[roomIdx].NumZ),
+            (roomIdx, x, z) => trLevel.Rooms[roomIdx].Sectors[x * trLevel.Rooms[roomIdx].NumZ + z].FloorInfo?.FirstOrDefault(f => f.Trigger != null)?.Trigger,
+            ng, false, registry, warnings);
+    }
+
+    /// <summary>
+    /// Shared by the TR and TEN exporters. <paramref name="tenFormat"/> selects TombEngine's variant of the action list: trigger types
+    /// 13-15 are TightRope / Crawl / Climb, camera indices are not masked and there are no NG extra words.
+    /// </summary>
+    internal static void ExportCore(Room?[] tombRooms, int roomCount, Func<int, (int NumX, int NumZ)> size,
+        Func<int, int, int, TrTrigger?> getTrigger, bool ng, bool tenFormat, ObjectRegistry registry, List<string> warnings)
+    {
+        bool catalog = ng && !tenFormat && EnsureNgCatalog();
         bool warnedCatalog = false, warnedUnknown = false;
         var ids = new Dictionary<object, int>(ReferenceEqualityComparer.Instance);
 
-        for (int roomIdx = 0; roomIdx < trLevel.Rooms.Length && roomIdx < tombRooms.Length; roomIdx++)
+        for (int roomIdx = 0; roomIdx < roomCount && roomIdx < tombRooms.Length; roomIdx++)
         {
             var room = tombRooms[roomIdx];
-            var r1 = trLevel.Rooms[roomIdx];
-            if (room == null || r1.NumX == 0 || r1.NumZ == 0) continue;
+            var (numX, numZ) = size(roomIdx);
+            if (room == null || numX == 0 || numZ == 0) continue;
 
-            var specs = new List<Spec>?[r1.NumX, r1.NumZ];
-            var signatures = new string?[r1.NumX, r1.NumZ];
-            for (int x = 0; x < r1.NumX; x++)
-            for (int z = 0; z < r1.NumZ; z++)
+            var specs = new List<Spec>?[numX, numZ];
+            var signatures = new string?[numX, numZ];
+            for (int x = 0; x < numX; x++)
+            for (int z = 0; z < numZ; z++)
             {
-                var trigger = r1.Sectors[x * r1.NumZ + z].FloorInfo?.FirstOrDefault(f => f.Trigger != null)?.Trigger;
+                var trigger = getTrigger(roomIdx, x, z);
                 if (trigger == null) continue;
-                var list = Decode(trigger, ng, catalog, registry, ids, warnings, roomIdx, x, z, ref warnedCatalog, ref warnedUnknown);
+                var list = Decode(trigger, ng, catalog, registry, ids, warnings, roomIdx, x, z, ref warnedCatalog, ref warnedUnknown, tenFormat);
                 if (list.Count == 0) continue;
                 specs[x, z] = list;
                 signatures[x, z] = string.Join(";", list.Select(s => s.Signature));
             }
 
             // Greedy rectangle cover over sectors with identical trigger lists.
-            var done = new bool[r1.NumX, r1.NumZ];
-            for (int z = 0; z < r1.NumZ; z++)
-            for (int x = 0; x < r1.NumX; x++)
+            var done = new bool[numX, numZ];
+            for (int z = 0; z < numZ; z++)
+            for (int x = 0; x < numX; x++)
             {
                 string? sig = signatures[x, z];
                 if (sig == null || done[x, z]) continue;
                 int x1 = x;
-                while (x1 + 1 < r1.NumX && !done[x1 + 1, z] && signatures[x1 + 1, z] == sig) x1++;
+                while (x1 + 1 < numX && !done[x1 + 1, z] && signatures[x1 + 1, z] == sig) x1++;
                 int z1 = z;
-                while (z1 + 1 < r1.NumZ)
+                while (z1 + 1 < numZ)
                 {
                     bool rowOk = true;
                     for (int xx = x; xx <= x1 && rowOk; xx++)
@@ -126,9 +139,8 @@ internal static class TriggerExporter
             }
         }
     }
-
     private static List<Spec> Decode(TrTrigger t, bool ng, bool catalog, ObjectRegistry reg, Dictionary<object, int> ids,
-        List<string> warnings, int roomIdx, int x, int z, ref bool warnedCatalog, ref bool warnedUnknown)
+        List<string> warnings, int roomIdx, int x, int z, ref bool warnedCatalog, ref bool warnedUnknown, bool ten = false)
     {
         var result = new List<Spec>();
         string where = $"room {roomIdx} sector ({x},{z})";
@@ -137,11 +149,11 @@ internal static class TriggerExporter
         switch (t.SubFunction)
         {
             case >= 0 and <= 11: type = (TriggerType)t.SubFunction; break;
-            case 12: type = ng ? TriggerType.ConditionNg : TriggerType.Monkey; break;
-            case 13: type = TriggerType.Skeleton; break;
-            case 14: type = TriggerType.TightRope; break;
-            case 15: type = TriggerType.Crawl; break;
-            case 16: type = TriggerType.Climb; break;
+            case 12: type = ng && !ten ? TriggerType.ConditionNg : TriggerType.Monkey; break;
+            case 13: type = ten ? TriggerType.TightRope : TriggerType.Skeleton; break;
+            case 14: type = ten ? TriggerType.Crawl : TriggerType.TightRope; break;
+            case 15: type = ten ? TriggerType.Climb : TriggerType.Crawl; break;
+            case 16 when !ten: type = TriggerType.Climb; break;
             default:
                 warnings.Add($"Trigger in {where} skipped: unknown trigger type {t.SubFunction}");
                 return result;
@@ -159,7 +171,15 @@ internal static class TriggerExporter
 
         foreach (var a in t.Actions)
         {
-            var s = new Spec { Type = type, OneShot = oneShot, CodeBits = codeBits, Timer = setupTimer, Extra = setupExtra };
+            // The compiler takes type, timer, one-shot and code bits from the first (setup) trigger alone; camera and flyby actions also have an
+            // extra word of their own.
+            // TR levels keep the legacy convention (every action carries the sector's type and setup, as TombLib's own PRJ import does), which also
+            // guarantees an identical setup word whichever trigger a recompile picks; TEN levels are made in the editor, where the other actions
+            // keep their own defaults.
+            bool setup = !(ten && result.Count > 0);
+            var s = setup
+                ? new Spec { Type = type, OneShot = oneShot, CodeBits = codeBits, Timer = setupTimer, Extra = setupExtra }
+                : new Spec { Type = TriggerType.Trigger };
             switch (a.Type)
             {
                 case 0: // Object
@@ -170,11 +190,12 @@ internal static class TriggerExporter
                     break;
                 case 1: // Camera
                     s.TargetType = TriggerTargetType.Camera;
-                    if (!reg.Cameras.TryGetValue(a.Param & 0x7F, out var camera)) { warnings.Add($"Trigger in {where}: no camera with index {a.Param}, action skipped"); continue; }
+                    if (!reg.Cameras.TryGetValue(ten ? a.Param : a.Param & 0x7F, out var camera)) { warnings.Add($"Trigger in {where}: no camera with index {a.Param}, action skipped"); continue; }
                     s.TargetObject = camera;
                     if (a.HasExtra)
                     {
                         s.Timer = (ushort)(a.Extra & 0xFF);
+                        if (!setup) s.OneShot = (a.Extra & 0x100) != 0;
                         if (camera.CameraMode != CameraInstanceMode.Sniper)
                             camera.MoveTimer = (byte)((a.Extra >> 9) & 0x3F);
                     }
@@ -210,7 +231,12 @@ internal static class TriggerExporter
                     s.TargetType = TriggerTargetType.FlyByCamera;
                     if (!reg.FlybyBySequence.TryGetValue(a.Param, out var flyby)) { warnings.Add($"Trigger in {where}: no flyby camera with sequence {a.Param}, action skipped"); continue; }
                     s.TargetObject = flyby;
+                    if (!setup && a.HasExtra) s.OneShot = (a.Extra & 0x100) != 0;
                     break;
+                case 16 when ten: // volume event set
+                case 17 when ten: // global event set
+                    warnings.Add($"Trigger in {where}: event set action skipped (event sets are not exported yet)");
+                    continue;
                 case 13: s.TargetType = TriggerTargetType.ParameterNg; s.TargetKey = a.Param; break;
                 case 14: s.TargetType = TriggerTargetType.FmvNg; s.TargetKey = a.Param; break;
                 case 15: s.TargetType = TriggerTargetType.TimerfieldNg; s.TargetKey = a.Param; break;

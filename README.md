@@ -16,7 +16,7 @@ Also this program is vibe-coded, so sorry for bad quality code
     - [x] TR4
     - [x] TRNG Levels
     - [x] TR5
-    - [ ] TEN
+    - [x] TEN
 - [x] Add PRJ2 extraction.
 - [x] Write Geometry of rooms
 - [x] Add level elements (sound sources, light points, sinks, etc.)

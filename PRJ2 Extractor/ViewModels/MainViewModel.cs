@@ -33,9 +33,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _isIndeterminate;
     private int _progress;
     private string _busyText = "";
-    private string _statusText = "Open a Tomb Raider 4 or 5 level to begin.";
+    private string _statusText = "Open a Tomb Raider 4, Tomb Raider 5 or TombEngine level to begin.";
     private string? _lastExportPath;
     private bool _isDragOver;
+    private bool _textureTiled = true;
 
     public MainViewModel()
     {
@@ -80,7 +81,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public double TextureHeight => _textureSource?.PixelHeight ?? 0;
     public string TextureCaption => _textureSource == null
         ? "No texture loaded"
-        : $"{_textureSource.PixelWidth} x {_textureSource.PixelHeight} px  -  {_textureSource.PixelHeight / 256} tiles";
+        : _textureTiled ? $"{_textureSource.PixelWidth} x {_textureSource.PixelHeight} px  -  {_textureSource.PixelHeight / 256} tiles"
+                        : $"{_textureSource.PixelWidth} x {_textureSource.PixelHeight} px  -  first room atlas";
 
     public double Zoom
     {
@@ -96,7 +98,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     // ---- export
     public string OutputFolder { get => _outputFolder; set { if (SetProperty(ref _outputFolder, value)) OnPropertyChanged(nameof(OutputSummary)); } }
     public string OutputName { get => _outputName; set { if (SetProperty(ref _outputName, value)) OnPropertyChanged(nameof(OutputSummary)); } }
-    public string OutputSummary => string.IsNullOrWhiteSpace(OutputName) ? "" : $"{OutputName.Trim()}.prj2  +  texture atlas (.tga)";
+    public string OutputSummary => string.IsNullOrWhiteSpace(OutputName) ? ""
+        : _session?.IsTen == true ? $"{OutputName.Trim()}.prj2  +  {OutputName.Trim()}_textures (.png atlases)"
+        : $"{OutputName.Trim()}.prj2  +  texture atlas (.tga)";
     public string? LastExportPath
     {
         get => _lastExportPath;
@@ -142,8 +146,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         var dialog = new OpenFileDialog
         {
-            Title = "Open a Tomb Raider level",
-            Filter = "Tomb Raider levels (*.tr4;*.trc)|*.tr4;*.trc|Tomb Raider 4 (*.tr4)|*.tr4|Tomb Raider 5 (*.trc)|*.trc|All files (*.*)|*.*",
+            Title = "Open a Tomb Raider or TombEngine level",
+            Filter = "Levels (*.tr4;*.trc;*.ten)|*.tr4;*.trc;*.ten|Tomb Raider 4 (*.tr4)|*.tr4|Tomb Raider 5 (*.trc)|*.trc|TombEngine (*.ten)|*.ten|All files (*.*)|*.*",
             InitialDirectory = HasLevel && Directory.Exists(LevelFolder) ? LevelFolder : ""
         };
         if (dialog.ShowDialog() == true)
@@ -156,7 +160,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (IsBusy) return;
         if (!LevelSession.IsSupportedExtension(path))
         {
-            Log(LogLevel.Error, $"'{Path.GetFileName(path)}' is not a .tr4 or .trc level.");
+            Log(LogLevel.Error, $"'{Path.GetFileName(path)}' is not a .tr4, .trc or .ten level.");
             StatusText = "That file type is not supported.";
             return;
         }
@@ -171,7 +175,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             var session = await LevelSession.LoadAsync(path, new Progress<int>(v => Progress = v));
             ReplaceSession(session);
-            Log(LogLevel.Success, $"Opened {Path.GetFileName(path)} ({session.FormatName}): {session.Level.NumRooms} rooms.");
+            Log(LogLevel.Success, $"Opened {Path.GetFileName(path)} ({session.FormatName}): {session.RoomCount} rooms.");
             StatusText = $"{LevelName} is ready to export.";
         }
         catch (LevelLoadException ex)
@@ -199,7 +203,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         LevelFolder = Path.GetDirectoryName(session.FilePath) ?? "";
         LevelFormat = session.FormatName;
         Stats = session.Stats;
-        TextureSource = session.Level.TextureBitmap;
+        _textureTiled = session.TextureIsTiled;
+        TextureSource = session.TextureBitmap;
         Zoom = 1.0;
         OutputFolder = LevelFolder;
         OutputName = LevelName;
@@ -220,7 +225,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         TextureSource = null;
         OutputFolder = OutputName = "";
         LastExportPath = null;
-        StatusText = "Open a Tomb Raider 4 or 5 level to begin.";
+        StatusText = "Open a Tomb Raider 4, Tomb Raider 5 or TombEngine level to begin.";
         OnPropertyChanged(nameof(HasLevel));
         OnPropertyChanged(nameof(CanEditOutput));
         OnPropertyChanged(nameof(WindowTitle));
@@ -287,6 +292,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 .Select(Path.GetFileName).ToList();
             var extra = others.Count > 0 ? $" and {string.Join(", ", others)}" : "";
             Log(LogLevel.Success, $"Exported {Path.GetFileName(result.Prj2Path)}{extra} in {result.Elapsed.TotalSeconds:F1} s.");
+            foreach (var note in result.Notes ?? [])
+                Log(LogLevel.Info, note);
 
             if (result.Warnings.Count > 0)
             {
@@ -321,7 +328,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     // ---- textures
     private void SaveTga()
     {
-        if (_session?.Level.TextureBitmap is not { PixelWidth: > 0, PixelHeight: > 0 } bitmap) return;
+        if (_session?.TextureBitmap is not { PixelWidth: > 0, PixelHeight: > 0 } bitmap) return;
 
         var dialog = new SaveFileDialog
         {
