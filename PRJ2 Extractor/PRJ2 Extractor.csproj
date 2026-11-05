@@ -19,6 +19,9 @@
   <ItemGroup Condition="Exists('C:\Tomb Editor\Catalogs\NgCatalog.xml')">
     <None Include="C:\Tomb Editor\Catalogs\NgCatalog.xml" Link="Catalogs\NgCatalog.xml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
+  </ItemGroup>
 
   <ItemGroup>
     <Reference Include="TombLib">
