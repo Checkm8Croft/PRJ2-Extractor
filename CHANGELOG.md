@@ -1,28 +1,36 @@
 ## PRJ2 Extractor Progess
 
-Tested level: TR4's Costal Ruins (`alexhub2.tr4`)
+Tested levels: 
+
+- TR4 Costal Ruins (`alexhub2.tr4`)
+- TR5 Escape with the Iris (`rich2.trc`)
+- TRNG with some custom levels taken from [TRCustoms](https://trcustoms.org/)
+- TEN with a test level made by me
+  **Not implemented yet the Volume Events extraction, since I don't how does they work and how to test and verify them**
 
 ### Tomb Raider versions support
 
 - TR4: Native from the original program
 - TR5: From #3
+- TRNG: From #5
+- TEN: From #8
 
 ### Geometry
 
-Status: 144/177 rooms (81%) byte-perfect; ~5% residual sector mismatch, believed structurally unresolvable
+Status: around 80% byte-perfect; ~5% residual sector mismatch, believed structurally unresolvable
 
 ### Textures
 
-In Progress
+Implemented, will cover around the 95-97% of the level
 
 ### Level Elements
 
-Implemented
+Implemented from #2
 
 ### Triggers
 
-TODO
+Implemented from #7
 
 ### Objects
 
-TODO
+Implemented from #6, wad extraction not included, use my Lara Extractor tool
