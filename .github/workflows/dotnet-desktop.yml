@@ -1,41 +1,3 @@
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-# This workflow will build, test, sign and package a WPF or Windows Forms desktop application
-# built on .NET Core.
-# To learn how to migrate your existing application to .NET Core,
-# refer to https://docs.microsoft.com/en-us/dotnet/desktop-wpf/migration/convert-project-from-net-framework
-#
-# To configure this workflow:
-#
-# 1. Configure environment variables
-# GitHub sets default environment variables for every workflow run.
-# Replace the variables relative to your project in the "env" section below.
-#
-# 2. Signing
-# Generate a signing certificate in the Windows Application
-# Packaging Project or add an existing signing certificate to the project.
-# Next, use PowerShell to encode the .pfx file using Base64 encoding
-# by running the following Powershell script to generate the output string:
-#
-# $pfx_cert = Get-Content '.\SigningCertificate.pfx' -Encoding Byte
-# [System.Convert]::ToBase64String($pfx_cert) | Out-File 'SigningCertificate_Encoded.txt'
-#
-# Open the output file, SigningCertificate_Encoded.txt, and copy the
-# string inside. Then, add the string to the repo as a GitHub secret
-# and name it "Base64_Encoded_Pfx."
-# For more information on how to configure your signing certificate for
-# this workflow, refer to https://github.com/microsoft/github-actions-for-desktop-apps#signing
-#
-# Finally, add the signing certificate password to the repo as a secret and name it "Pfx_Key".
-# See "Build the Windows Application Packaging project" below to see how the secret is used.
-#
-# For more information on GitHub Actions, refer to https://github.com/features/actions
-# For a complete CI/CD sample to get started with GitHub Action workflows for Desktop Applications,
-# refer to https://github.com/microsoft/github-actions-for-desktop-apps
-
 name: Build PRJ2-Extractor
 
 on:
@@ -45,52 +7,75 @@ on:
     branches: [ "master" ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
-
   build:
-
-    strategy:
-      matrix:
-        configuration: [Debug, Release]
-
-    runs-on: windows-latest  # For a list of available runner types, refer to
-                             # https://help.github.com/en/actions/reference/workflow-syntax-for-github-actions#jobsjob_idruns-on
+    runs-on: windows-latest
 
     env:
-      Solution_Name: "PRJ2 Extractor.slnx"                         # Replace with your solution name, i.e. MyWpfApp.sln.
-      Test_Project_Path: "PRJ2 Extractor/PRJ2 Extractor.csproj"                # Replace with the path to your test project, i.e. MyWpfApp.Tests\MyWpfApp.Tests.csproj.
-      
+      PROJECT_PATH: "PRJ2 Extractor/PRJ2 Extractor.csproj"
+      SOLUTION_PATH: "PRJ2 Extractor.slnx"
+      OUTPUT_DIR: "publish"
+      ZIP_NAME: "PRJ2-Extractor.zip"
+
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-    # Install the .NET Core workload
-    - name: Install .NET Core
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: 10.0.x
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
 
-    # Add  MSBuild to the PATH: https://github.com/microsoft/setup-msbuild
-    - name: Setup MSBuild.exe
-      uses: microsoft/setup-msbuild@v2
+      - name: Restore dependencies
+        run: dotnet restore "$env:SOLUTION_PATH"
 
-    # Execute all unit tests in the solution
-    - name: Execute unit tests
-      run: dotnet test
+      - name: Build solution
+        run: dotnet build "$env:SOLUTION_PATH" --configuration Release --no-restore
 
-    # Restore the application to populate the obj folder with RuntimeIdentifiers
-    - name: Restore the application
-      run: msbuild $env:Solution_Name /t:Restore /p:Configuration=$env:Configuration
-      env:
-        Configuration: ${{ matrix.configuration }}
+      - name: Run tests
+        run: dotnet test "$env:SOLUTION_PATH" --configuration Release --no-build
 
-    # Create the app package by building and packaging the Windows Application Packaging project
-    - name: Create the app package
-      run: msbuild $env:Wap_Project_Path /p:Configuration=$env:Configuration /p:UapAppxPackageBuildMode=$env:Appx_Package_Build_Mode /p:AppxBundle=$env:Appx_Bundle /p:PackageCertificateKeyFile=GitHubActionsWorkflow.pfx /p:PackageCertificatePassword=${{ secrets.Pfx_Key }}
-      env:
-        Appx_Bundle: Always
-        Appx_Bundle_Platforms: x86|x64
-        Appx_Package_Build_Mode: StoreUpload
-        Configuration: ${{ matrix.configuration }}
+      - name: Publish app
+        run: dotnet publish "$env:PROJECT_PATH" --configuration Release --output "$env:OUTPUT_DIR" --no-restore
+
+      - name: Zip publish output
+        shell: pwsh
+        run: |
+          if (Test-Path "$env:ZIP_NAME") { Remove-Item "$env:ZIP_NAME" -Force }
+          Compress-Archive -Path "$env:OUTPUT_DIR/*" -DestinationPath "$env:ZIP_NAME" -Force
+
+      - name: Upload ZIP as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PRJ2-Extractor
+          path: ${{ env.ZIP_NAME }}
+          if-no-files-found: error
+          compression-level: 0
+
+      - name: Update prj2 tag and release asset
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git tag --force prj2 $env:GITHUB_SHA
+          git push --force origin refs/tags/prj2
+
+          gh release view prj2 *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create prj2 "$env:ZIP_NAME" `
+              --title "PRJ2-Extractor" `
+              --notes "Automated build from commit $env:GITHUB_SHA" `
+              --target $env:GITHUB_SHA
+          }
+          else {
+            gh release upload prj2 "$env:ZIP_NAME" --clobber
+          }
