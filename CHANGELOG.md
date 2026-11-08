@@ -16,6 +16,7 @@ Tested levels:
 - TRNG: From #5
 - TEN: From #8
 - TR1: From #9
+- TR2-3: From #10
 
 ### Geometry
 

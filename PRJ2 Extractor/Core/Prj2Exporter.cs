@@ -55,6 +55,10 @@ public static class Prj2Exporter
             level.Settings.GameVersion = TRVersion.Game.TRNG;
         else if (trLevel.IsTr1)
             level.Settings.GameVersion = TRVersion.Game.TR1;
+        else if (trLevel.IsTr2)
+            level.Settings.GameVersion = TRVersion.Game.TR2;
+        else if (trLevel.IsTr3)
+            level.Settings.GameVersion = TRVersion.Game.TR3;
         // Needed before MakeRelative/MakeAbsolute calls below (texture registration) -- mirrors
         // PrjLoader's own "level.Settings.LevelFilePath = ..." setup at the start of LoadFromPrj.
         level.Settings.LevelFilePath = prj2FilePath;
