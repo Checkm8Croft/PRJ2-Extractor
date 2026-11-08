@@ -11,8 +11,8 @@ Also this program is vibe-coded, so sorry for bad quality code
 
 - Add support for other Tomb Raider versions:
     - [x] TR1
-    - [ ] TR2
-    - [ ] TR3
+    - [x] TR2
+    - [x] TR3
     - [x] TR4
     - [x] TRNG Levels
     - [x] TR5
@@ -30,3 +30,4 @@ Also this program is vibe-coded, so sorry for bad quality code
 - TombEngine Team: for [TombLib](https://github.com/TombEngine/Tomb-Editor) used for writing PRJ2 and [TombEngine](https://github.com/TombEngine/TombEngine) for the code used for TEN support
 - LostArtefacts Team: for [TombIO](https://github.com/LostArtefacts/TombIO) that helped me a little bit
 - [TRNG-CE](https://github.com/TombNextGeneration/TRNGCommunityEdition) for TRNG
+- [trview](https://github.com/chreden/trview) helped me with TR1-3 extraction

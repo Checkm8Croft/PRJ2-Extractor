@@ -17,7 +17,7 @@ public sealed record LogEntry(string Time, LogLevel Level, string Message);
 /// <summary>State and commands of the main window: open a TR4/TR5 level, preview its textures, export a Tomb Editor .prj2.</summary>
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
-    public const string Version = "0.2";
+    public const string Version = "0.3";
     private const int MaxWarningsLogged = 60;
 
     private LevelSession? _session;
@@ -33,7 +33,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _isIndeterminate;
     private int _progress;
     private string _busyText = "";
-    private string _statusText = "Open a Tomb Raider 1, 4, 5 or TombEngine level to begin.";
+    private string _statusText = "Open a Tomb Raider 1-5, TRNG or TombEngine level to begin.";
     private string? _lastExportPath;
     private bool _isDragOver;
     private bool _textureTiled = true;
@@ -225,7 +225,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         TextureSource = null;
         OutputFolder = OutputName = "";
         LastExportPath = null;
-        StatusText = "Open a Tomb Raider 4, Tomb Raider 5 or TombEngine level to begin.";
+        StatusText = "Open a Tomb Raider 1-5, TRNG or TombEngine level to begin.";
         OnPropertyChanged(nameof(HasLevel));
         OnPropertyChanged(nameof(CanEditOutput));
         OnPropertyChanged(nameof(WindowTitle));
