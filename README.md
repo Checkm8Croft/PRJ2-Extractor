@@ -10,7 +10,7 @@ Also this program is vibe-coded, so sorry for bad quality code
 ## TODO
 
 - Add support for other Tomb Raider versions:
-    - [ ] TR1
+    - [x] TR1
     - [ ] TR2
     - [ ] TR3
     - [x] TR4

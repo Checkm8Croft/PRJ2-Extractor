@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace PRJ2_Extractor.Models;
 
@@ -117,6 +117,8 @@ public class LevelRoom
     public byte WaterScheme, Reverb, AltGroup;
     public bool IsFlipRoom;
     public short OriginalRoom = -1;
+    /// <summary>Ambient light recovered directly in TombLib units (TR1, whose ambient is a 13-bit greyscale); null = derive it from <see cref="Colour"/> (TR4 / TR5).</summary>
+    public System.Numerics.Vector3? AmbientLight;
     public List<LevelLight> Lights = [];
     public List<LevelStatic> Statics = [];
 }
