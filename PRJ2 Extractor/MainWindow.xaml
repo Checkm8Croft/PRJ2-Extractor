@@ -70,7 +70,7 @@
                             </Rectangle>
                             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12">
                                 <TextBlock Text="Drop a level here" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="{StaticResource TextPrimary}"/>
-                                <TextBlock Text="Tomb Raider 1 (.phd), 4 (.tr4), 5 (.trc) or TombEngine (.ten)" Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,3,0,12"/>
+                                <TextBlock Text="Tomb Raider 1 (.phd), 2/3 (.tr2), 4 (.tr4), 5 (.trc) or TombEngine (.ten)" Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,3,0,12"/>
                                 <Button Content="Open level..." Command="{Binding OpenLevelCommand}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Center"/>
                             </StackPanel>
                         </Grid>

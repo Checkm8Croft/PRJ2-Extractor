@@ -28,7 +28,7 @@ public sealed class LevelSession : IDisposable
     public bool IsTen => Ten != null;
     public bool IsTr5 { get; }
     public string FormatName => Ten != null ? $"TombEngine {Ten.VersionText}"
-        : IsTr5 ? "Tomb Raider 5" : Level!.IsTr1 ? "Tomb Raider 1" : Level!.Ng != null ? "Tomb Raider 4 (TRNG)" : "Tomb Raider 4";
+        : IsTr5 ? "Tomb Raider 5" : Level!.IsTr1 ? "Tomb Raider 1" : Level!.IsTr2 ? "Tomb Raider 2" : Level!.IsTr3 ? "Tomb Raider 3" : Level!.Ng != null ? "Tomb Raider 4 (TRNG)" : "Tomb Raider 4";
     public int RoomCount => Ten?.Rooms.Count ?? Level!.NumRooms;
     public IReadOnlyList<LevelStat> Stats { get; }
 
@@ -91,6 +91,7 @@ public sealed class LevelSession : IDisposable
 
     public static bool IsSupportedExtension(string path) =>
         path.EndsWith(".phd", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".tub", StringComparison.OrdinalIgnoreCase)
+        || path.EndsWith(".tr2", StringComparison.OrdinalIgnoreCase)
         || path.EndsWith(".tr4", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".trc", StringComparison.OrdinalIgnoreCase)
         || path.EndsWith(".ten", StringComparison.OrdinalIgnoreCase);
 
@@ -98,7 +99,7 @@ public sealed class LevelSession : IDisposable
     public static Task<LevelSession> LoadAsync(string path, IProgress<int>? progress) => Task.Run(() =>
     {
         if (!IsSupportedExtension(path))
-            throw new LevelLoadException("This is not a Tomb Raider 1 (.phd, .tub), Tomb Raider 4 (.tr4), Tomb Raider 5 (.trc) or TombEngine (.ten) level.");
+            throw new LevelLoadException("This is not a Tomb Raider 1 (.phd, .tub), Tomb Raider 2/3 (.tr2), Tomb Raider 4 (.tr4), Tomb Raider 5 (.trc) or TombEngine (.ten) level.");
 
         if (path.EndsWith(".ten", StringComparison.OrdinalIgnoreCase))
             return LoadTen(path, progress);
@@ -126,7 +127,7 @@ public sealed class LevelSession : IDisposable
             throw new LevelLoadException(result switch
             {
                 1 => "The file does not exist.",
-                2 => "The Tomb Raider 1/4/5 signature was not found: this is not a supported level file.",
+                2 => "The Tomb Raider 1/2/3/4/5 signature was not found: this is not a supported level file.",
                 3 => "The level is encrypted and cannot be read.",
                 _ => "The level could not be read (damaged or unsupported file)."
             });

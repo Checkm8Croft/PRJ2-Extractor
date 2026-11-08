@@ -207,7 +207,7 @@ public partial class TrLevel : IDisposable
         progress?.Report(0);
         uint version = 0;
         byte result = 0;
-        bool isTr1 = false;
+        bool isTr1 = false, isTr23 = false;
 
         if (File.Exists(filename))
         {
@@ -217,6 +217,11 @@ public partial class TrLevel : IDisposable
             if (version == Tr1Version)
             {
                 isTr1 = true;
+                version = 0;
+            }
+            else if (IsTr23Version(version))
+            {
+                isTr23 = true;
                 version = 0;
             }
             else if (version != Tr4Signature && version != Tr4Encrypted)
@@ -244,6 +249,13 @@ public partial class TrLevel : IDisposable
             byte r1 = LoadTr1(filename, progress);
             if (r1 == 0) PostProcessRooms();
             return r1;
+        }
+
+        if (isTr23)
+        {
+            byte r23 = LoadTr23(filename, progress);
+            if (r23 == 0) PostProcessRooms();
+            return r23;
         }
 
         if (Path.GetExtension(filename).Equals(".trc", StringComparison.OrdinalIgnoreCase))

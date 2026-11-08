@@ -147,7 +147,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var dialog = new OpenFileDialog
         {
             Title = "Open a Tomb Raider or TombEngine level",
-            Filter = "Levels (*.phd;*.tub;*.tr4;*.trc;*.ten)|*.phd;*.tub;*.tr4;*.trc;*.ten|Tomb Raider 1 (*.phd;*.tub)|*.phd;*.tub|Tomb Raider 4 (*.tr4)|*.tr4|Tomb Raider 5 (*.trc)|*.trc|TombEngine (*.ten)|*.ten|All files (*.*)|*.*",
+            Filter = "Levels (*.phd;*.tub;*.tr2;*.tr4;*.trc;*.ten)|*.phd;*.tub;*.tr2;*.tr4;*.trc;*.ten|Tomb Raider 1 (*.phd;*.tub)|*.phd;*.tub|Tomb Raider 2 / 3 (*.tr2)|*.tr2|Tomb Raider 4 (*.tr4)|*.tr4|Tomb Raider 5 (*.trc)|*.trc|TombEngine (*.ten)|*.ten|All files (*.*)|*.*",
             InitialDirectory = HasLevel && Directory.Exists(LevelFolder) ? LevelFolder : ""
         };
         if (dialog.ShowDialog() == true)
@@ -160,7 +160,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (IsBusy) return;
         if (!LevelSession.IsSupportedExtension(path))
         {
-            Log(LogLevel.Error, $"'{Path.GetFileName(path)}' is not a .phd, .tub, .tr4, .trc or .ten level.");
+            Log(LogLevel.Error, $"'{Path.GetFileName(path)}' is not a .phd, .tub, .tr2, .tr4, .trc or .ten level.");
             StatusText = "That file type is not supported.";
             return;
         }

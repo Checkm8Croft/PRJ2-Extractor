@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Numerics;
 using System.Windows;
 using System.Windows.Media;
@@ -56,7 +56,7 @@ public partial class TrLevel
             uint dataWords = br.ReadUInt32();
             long dataEnd = ms.Position + dataWords * 2L;
             if (dataEnd > size) return 4;
-            if (dataWords > 0) ReadTr1RoomData(br, r);
+            if (dataWords > 0) ReadRoomDataTr1To3(br, r, extendedVertex: false);
             ms.Position = dataEnd;
 
             r.NumPortals = br.ReadUInt16();
@@ -77,13 +77,7 @@ public partial class TrLevel
                 r.Sectors[j] = s;
             }
 
-            // Ambient intensity: 13-bit greyscale, higher = darker. TombLib packs it as (1 - luma(ambient / 2)) * 255 << 5
-            // (Compilers/Rooms.cs PackColorTo13BitGreyscale), so it is inverted here.
-            short ambient = br.ReadInt16();
-            float grey = Math.Clamp((1f - Math.Clamp(ambient >> 5, 0, 255) / 255f) * 2f, 0f, 2f);
-            r.AmbientLight = new Vector3(grey);
-            byte c = (byte)Math.Clamp((int)MathF.Round(grey * 128f) + 4, 0, 255); // keeps the TR4-style room colour consistent
-            r.Colour.R = r.Colour.G = r.Colour.B = c;
+            ApplyAmbient13Bit(r, br.ReadInt16());
 
             ushort lightCount = br.ReadUInt16();
             for (int li = 0; li < lightCount; li++)
@@ -246,7 +240,8 @@ public partial class TrLevel
         return 0;
     }
 
-    private static void ReadTr1RoomData(BinaryReader br, LevelRoom room)
+    /// <summary>Room geometry shared by TR1-TR3; the vertex is 8 bytes in TR1 and 12 bytes in TR2 / TR3 (attributes + second lighting / colour).</summary>
+    private static void ReadRoomDataTr1To3(BinaryReader br, LevelRoom room, bool extendedVertex)
     {
         short numVertices = br.ReadInt16();
         room.Vertices = new RoomVertex[Math.Max(0, (int)numVertices)];
@@ -259,6 +254,11 @@ public partial class TrLevel
                 Z = br.ReadInt16(),
                 Lighting = br.ReadInt16(),
             };
+            if (extendedVertex)
+            {
+                room.Vertices[i].Attributes = br.ReadUInt16();
+                room.Vertices[i].Colour = br.ReadUInt16();
+            }
         }
 
         short numRectangles = br.ReadInt16();
