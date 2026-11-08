@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.IO.Compression;
 using System.Text;
 using System.Windows;
@@ -8,7 +8,7 @@ using PRJ2_Extractor.Models;
 
 namespace PRJ2_Extractor.Core;
 
-public class TrLevel : IDisposable
+public partial class TrLevel : IDisposable
 {
     private const uint Tr4Signature = 0x00345254;
     private const uint Tr4Encrypted = 0x63345254;
@@ -207,13 +207,19 @@ public class TrLevel : IDisposable
         progress?.Report(0);
         uint version = 0;
         byte result = 0;
+        bool isTr1 = false;
 
         if (File.Exists(filename))
         {
             using var fs = File.OpenRead(filename);
             using var br = new BinaryReader(fs);
             version = br.ReadUInt32();
-            if (version != Tr4Signature && version != Tr4Encrypted)
+            if (version == Tr1Version)
+            {
+                isTr1 = true;
+                version = 0;
+            }
+            else if (version != Tr4Signature && version != Tr4Encrypted)
             {
                 version = 0;
                 result = 2;
@@ -232,6 +238,13 @@ public class TrLevel : IDisposable
 
         progress?.Report(1);
         if (result != 0) return result;
+
+        if (isTr1)
+        {
+            byte r1 = LoadTr1(filename, progress);
+            if (r1 == 0) PostProcessRooms();
+            return r1;
+        }
 
         if (Path.GetExtension(filename).Equals(".trc", StringComparison.OrdinalIgnoreCase))
         {
