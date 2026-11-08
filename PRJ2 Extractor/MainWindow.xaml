@@ -26,7 +26,7 @@
             <Grid>
                 <StackPanel>
                     <TextBlock Text="PRJ2 Extractor" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
-                    <TextBlock Text="Tomb Raider 4 / 5 or TombEngine level to Tomb Editor project (.prj2), with textures" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
+                    <TextBlock Text="Tomb Raider 1, 4 and 5 or TombEngine level to Tomb Editor project (.prj2), with textures" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
                 </StackPanel>
                 <Border HorizontalAlignment="Right" VerticalAlignment="Center" Background="{StaticResource AccentSoft}" CornerRadius="10" Padding="10,3">
                     <TextBlock Text="{Binding VersionText}" Foreground="{StaticResource Accent}" FontWeight="SemiBold" FontSize="12"/>

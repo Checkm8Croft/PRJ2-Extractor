@@ -7,6 +7,7 @@ Tested levels:
 - TRNG with some custom levels taken from [TRCustoms](https://trcustoms.org/)
 - TEN with a test level made by me
   **Not implemented yet the Volume Events extraction, since I don't how does they work and how to test and verify them**
+- TR1 Atlantis (`level10b.phd`)
 
 ### Tomb Raider versions support
 
@@ -14,6 +15,7 @@ Tested levels:
 - TR5: From #3
 - TRNG: From #5
 - TEN: From #8
+- TR1: From #9
 
 ### Geometry
 

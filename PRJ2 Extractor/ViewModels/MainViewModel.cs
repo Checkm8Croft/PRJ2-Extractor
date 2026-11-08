@@ -33,7 +33,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _isIndeterminate;
     private int _progress;
     private string _busyText = "";
-    private string _statusText = "Open a Tomb Raider 4, Tomb Raider 5 or TombEngine level to begin.";
+    private string _statusText = "Open a Tomb Raider 1, 4, 5 or TombEngine level to begin.";
     private string? _lastExportPath;
     private bool _isDragOver;
     private bool _textureTiled = true;
