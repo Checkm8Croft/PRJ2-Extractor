@@ -174,6 +174,9 @@ public static class Prj2Exporter
             }
 
             SynthesizeWallHeights(room, trLevel.Rooms[i], pr);
+            // TR1 FloorData can only store planar slopes, so the compiler flattens non-planar sectors; the real corner heights
+            // survive in the compiled floor / ceiling polygons (see RefineHeightsFromRoomGeometry).
+            if (trLevel.IsTr1) RefineHeightsFromRoomGeometry(room, trLevel.Rooms[i]);
             ApplyCompiledTriangleSplits(room, trLevel.Rooms[i], pr);
             room.NormalizeRoomY();
             ExportLights(room, trLevel.Rooms[i], pr);
@@ -414,6 +417,67 @@ public static class Prj2Exporter
             result.Add((sx, sz, ex, ez));
         }
         return result;
+    }
+    /// <summary>
+    /// Restores the real (possibly non-planar) floor and ceiling corner heights of a classic TR1 room from its compiled mesh.
+    /// TR1 FloorData only encodes planar slopes, so TombLib's compiler flattens a sector whose four corners are not coplanar
+    /// and the heights rebuilt from FloorData are planar (about 14% of the floors and 8% of the ceilings of a typical
+    /// level differ from the project). The room polygons keep the true heights: every sector with a floor / ceiling is
+    /// compiled as one sector-sized quad or two triangles whose vertices sit exactly on the sector corners. Floor polygons
+    /// have a negative signed XZ area and ceiling polygons a positive one (checked on about 12,000 polygons of three
+    /// levels: no exception), which also separates the two surfaces when floor and ceiling are close together.
+    /// A corner with no polygon (no texture, or a portal) keeps the FloorData value. Validated against three
+    /// hand-authored projects: floors 2335 -> 2722, 1822 -> 2011, 3124 -> 3513 exact sectors, ceilings 2510 -> 2722,
+    /// 1805 -> 2012, 3186 -> 3510, with no sector made worse.
+    /// </summary>
+    private static void RefineHeightsFromRoomGeometry(Room room, LevelRoom r1)
+    {
+        // corner id: 0 XnZn, 1 XpZn, 2 XnZp, 3 XpZp (same numbering as ApplyCompiledTriangleSplits)
+        var floorCandidates = new Dictionary<(int X, int Z, int Corner), HashSet<int>>();
+        var ceilingCandidates = new Dictionary<(int X, int Z, int Corner), HashSet<int>>();
+        foreach (var face in r1.Rectangles.Concat(r1.Triangles))
+        {
+            if (face.Vertices.Any(v => v >= r1.Vertices.Length)) continue;
+            var vs = face.Vertices.Select(v => r1.Vertices[v]).ToArray();
+            if (vs.Length < 3) continue;
+            int minX = vs.Min(v => (int)v.X), maxX = vs.Max(v => (int)v.X), minZ = vs.Min(v => (int)v.Z), maxZ = vs.Max(v => (int)v.Z);
+            if (maxX - minX != 1024 || maxZ - minZ != 1024 || minX % 1024 != 0 || minZ % 1024 != 0) continue; // exactly one sector
+            if (vs.Select(v => (v.X, v.Z)).Distinct().Count() < 3) continue;                                 // not a vertical face
+            int sx = minX / 1024, sz = minZ / 1024;
+            if (sx < 0 || sz < 0 || sx >= room.NumXSectors || sz >= room.NumZSectors) continue;
+
+            double area = 0;
+            for (int k = 0; k < vs.Length; k++)
+            {
+                var a = vs[k]; var b = vs[(k + 1) % vs.Length];
+                area += (double)a.X * b.Z - (double)b.X * a.Z;
+            }
+            if (area == 0) continue;
+            var target = area < 0 ? floorCandidates : ceilingCandidates;
+            foreach (var v in vs)
+            {
+                var key = (sx, sz, (v.X == minX ? 0 : 1) + (v.Z == minZ ? 0 : 2));
+                if (!target.TryGetValue(key, out var set)) target[key] = set = new HashSet<int>();
+                set.Add(-v.Y + r1.YBottom); // same frame as the sector heights written by Export
+            }
+        }
+
+        static short Nearest(HashSet<int> set, int current) => (short)set.OrderBy(h => Math.Abs(h - current)).First();
+
+        for (int x = 0; x < room.NumXSectors; x++)
+            for (int z = 0; z < room.NumZSectors; z++)
+            {
+                var sector = room.Sectors[x, z];
+                if (sector.Type != SectorType.Floor) continue;
+                if (floorCandidates.TryGetValue((x, z, 0), out var f0)) sector.Floor.XnZn = Nearest(f0, sector.Floor.XnZn);
+                if (floorCandidates.TryGetValue((x, z, 1), out var f1)) sector.Floor.XpZn = Nearest(f1, sector.Floor.XpZn);
+                if (floorCandidates.TryGetValue((x, z, 2), out var f2)) sector.Floor.XnZp = Nearest(f2, sector.Floor.XnZp);
+                if (floorCandidates.TryGetValue((x, z, 3), out var f3)) sector.Floor.XpZp = Nearest(f3, sector.Floor.XpZp);
+                if (ceilingCandidates.TryGetValue((x, z, 0), out var c0)) sector.Ceiling.XnZn = Nearest(c0, sector.Ceiling.XnZn);
+                if (ceilingCandidates.TryGetValue((x, z, 1), out var c1)) sector.Ceiling.XpZn = Nearest(c1, sector.Ceiling.XpZn);
+                if (ceilingCandidates.TryGetValue((x, z, 2), out var c2)) sector.Ceiling.XnZp = Nearest(c2, sector.Ceiling.XnZp);
+                if (ceilingCandidates.TryGetValue((x, z, 3), out var c3)) sector.Ceiling.XpZp = Nearest(c3, sector.Ceiling.XpZp);
+            }
     }
     /// <summary>
     /// Sets SplitDirectionIsXEqualsZ of non-planar floor/ceiling sectors from the diagonal the compiled TR4 mesh really

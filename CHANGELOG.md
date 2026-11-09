@@ -20,7 +20,9 @@ Tested levels:
 
 ### Geometry
 
-Status: around 80% byte-perfect; ~5% residual sector mismatch, believed structurally unresolvable
+- Status: around 80% byte-perfect; ~5% residual sector mismatch, believed structurally unresolvable
+
+- tr1: recovered non-planar floor and ceiling heights from #11
 
 ### Textures
 
