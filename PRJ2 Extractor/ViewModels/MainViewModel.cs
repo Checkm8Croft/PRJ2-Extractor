@@ -61,6 +61,20 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public string WindowTitle => HasLevel ? $"{LevelName} - PRJ2 Extractor" : "PRJ2 Extractor";
     public string VersionText => $"v{Version}";
 
+    // ---- colour theme
+    public bool IsSystemTheme { get => ThemeService.Choice == ThemeChoice.System; set { if (value) SetTheme(ThemeChoice.System); } }
+    public bool IsLightTheme { get => ThemeService.Choice == ThemeChoice.Light; set { if (value) SetTheme(ThemeChoice.Light); } }
+    public bool IsDarkTheme { get => ThemeService.Choice == ThemeChoice.Dark; set { if (value) SetTheme(ThemeChoice.Dark); } }
+
+    private void SetTheme(ThemeChoice choice)
+    {
+        if (ThemeService.Choice == choice) return;
+        ThemeService.SetChoice(choice);
+        OnPropertyChanged(nameof(IsSystemTheme));
+        OnPropertyChanged(nameof(IsLightTheme));
+        OnPropertyChanged(nameof(IsDarkTheme));
+    }
+
     // ---- texture preview
     public BitmapSource? TextureSource
     {

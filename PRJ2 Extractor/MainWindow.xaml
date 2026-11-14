@@ -4,7 +4,7 @@
         Title="{Binding WindowTitle}"
         Width="1060" Height="740" MinWidth="920" MinHeight="640"
         WindowStartupLocation="CenterScreen"
-        Background="{StaticResource WindowBackground}"
+        Background="{DynamicResource WindowBackground}"
         FontSize="13"
         AllowDrop="True" UseLayoutRounding="True" SnapsToDevicePixels="True"
         PreviewDragOver="Window_PreviewDragOver" DragLeave="Window_DragLeave" Drop="Window_Drop">
@@ -22,15 +22,26 @@
         </Grid.RowDefinitions>
 
         <!-- ============ header ============ -->
-        <Border Grid.Row="0" Background="White" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,0,0,1" Padding="24,14">
+        <Border Grid.Row="0" Background="{DynamicResource SurfaceBackground}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,0,0,1" Padding="24,14">
             <Grid>
                 <StackPanel>
-                    <TextBlock Text="PRJ2 Extractor" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
+                    <TextBlock Text="PRJ2 Extractor" FontSize="20" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
                     <TextBlock Text="Tomb Raider 1-5, TRNG or TombEngine level to Tomb Editor project (.prj2), with textures" Style="{StaticResource Caption}" Margin="0,2,0,0"/>
                 </StackPanel>
-                <Border HorizontalAlignment="Right" VerticalAlignment="Center" Background="{StaticResource AccentSoft}" CornerRadius="10" Padding="10,3">
-                    <TextBlock Text="{Binding VersionText}" Foreground="{StaticResource Accent}" FontWeight="SemiBold" FontSize="12"/>
-                </Border>
+                <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal">
+                    <Border Background="{DynamicResource HoverFill}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="1" CornerRadius="9" Padding="2"
+                            Margin="0,0,12,0" ToolTip="Colour theme">
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton Content="System" GroupName="Theme" IsChecked="{Binding IsSystemTheme, Mode=TwoWay}" Style="{StaticResource ThemeChoice}"
+                                         ToolTip="Follow the Windows light / dark setting"/>
+                            <RadioButton Content="Light" GroupName="Theme" IsChecked="{Binding IsLightTheme, Mode=TwoWay}" Style="{StaticResource ThemeChoice}"/>
+                            <RadioButton Content="Dark" GroupName="Theme" IsChecked="{Binding IsDarkTheme, Mode=TwoWay}" Style="{StaticResource ThemeChoice}"/>
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{DynamicResource AccentSoft}" CornerRadius="10" Padding="10,3" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding VersionText}" Foreground="{DynamicResource Accent}" FontWeight="SemiBold" FontSize="12"/>
+                    </Border>
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -58,18 +69,18 @@
                             <Rectangle RadiusX="10" RadiusY="10" StrokeThickness="1.5" StrokeDashArray="4 3" Fill="Transparent">
                                 <Rectangle.Style>
                                     <Style TargetType="Rectangle">
-                                        <Setter Property="Stroke" Value="{StaticResource FieldBorder}"/>
+                                        <Setter Property="Stroke" Value="{DynamicResource FieldBorder}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsDragOver}" Value="True">
-                                                <Setter Property="Stroke" Value="{StaticResource Accent}"/>
-                                                <Setter Property="Fill" Value="{StaticResource AccentSoft}"/>
+                                                <Setter Property="Stroke" Value="{DynamicResource Accent}"/>
+                                                <Setter Property="Fill" Value="{DynamicResource AccentSoft}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </Rectangle.Style>
                             </Rectangle>
                             <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Margin="12">
-                                <TextBlock Text="Drop a level here" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="{StaticResource TextPrimary}"/>
+                                <TextBlock Text="Drop a level here" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Foreground="{DynamicResource TextPrimary}"/>
                                 <TextBlock Text=".phd, .tr2, .tr4, .trc, .ten" Style="{StaticResource Caption}" HorizontalAlignment="Center" Margin="0,3,0,12"/>
                                 <Button Content="Open level..." Command="{Binding OpenLevelCommand}" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Center"/>
                             </StackPanel>
@@ -82,9 +93,9 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                <TextBlock Text="{Binding LevelName}" FontSize="18" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Foreground="{StaticResource TextPrimary}"/>
-                                <Border Grid.Column="1" Background="{StaticResource AccentSoft}" CornerRadius="10" Padding="9,2" Margin="10,0,0,0" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding LevelFormat}" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource Accent}"/>
+                                <TextBlock Text="{Binding LevelName}" FontSize="18" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Foreground="{DynamicResource TextPrimary}"/>
+                                <Border Grid.Column="1" Background="{DynamicResource AccentSoft}" CornerRadius="10" Padding="9,2" Margin="10,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding LevelFormat}" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Accent}"/>
                                 </Border>
                             </Grid>
                             <TextBlock Text="{Binding LevelFolder}" ToolTip="{Binding LevelFolder}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
@@ -99,7 +110,7 @@
                                     <DataTemplate>
                                         <StackPanel Margin="0,6,0,0">
                                             <TextBlock Text="{Binding Label}" Style="{StaticResource Caption}"/>
-                                            <TextBlock Text="{Binding Value}" FontSize="15" FontWeight="SemiBold" Foreground="{StaticResource TextPrimary}"/>
+                                            <TextBlock Text="{Binding Value}" FontSize="15" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
                                         </StackPanel>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
@@ -188,9 +199,9 @@
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Text="{Binding Level, Converter={StaticResource LogLevelGlyph}}" Foreground="{Binding Level, Converter={StaticResource LogLevelBrush}}" FontWeight="Bold" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Level, Converter={StaticResource LogLevelGlyph}}" Style="{StaticResource LogMarker}"/>
                                         <TextBlock Grid.Column="1" Text="{Binding Time}" Style="{StaticResource Caption}" Margin="4,1,8,0"/>
-                                        <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" Foreground="{StaticResource TextPrimary}" FontSize="12.5"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding Message}" TextWrapping="Wrap" Foreground="{DynamicResource TextPrimary}" FontSize="12.5"/>
                                     </Grid>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
@@ -226,9 +237,9 @@
                         </StackPanel>
                     </Grid>
 
-                    <Border Grid.Row="1" Margin="0,12,0,0" Background="{StaticResource PreviewBackground}" CornerRadius="10" ClipToBounds="True">
+                    <Border Grid.Row="1" Margin="0,12,0,0" Background="{DynamicResource PreviewBackground}" CornerRadius="10" ClipToBounds="True">
                         <Grid>
-                            <TextBlock Text="The texture atlas of the level appears here" Foreground="{StaticResource PreviewText}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                            <TextBlock Text="The texture atlas of the level appears here" Foreground="{DynamicResource PreviewText}" HorizontalAlignment="Center" VerticalAlignment="Center"
                                        Visibility="{Binding HasTexture, Converter={StaticResource InverseBoolToVisibility}}"/>
                             <ScrollViewer x:Name="PreviewScroller" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
                                           Visibility="{Binding HasTexture, Converter={StaticResource BoolToVisibility}}"
@@ -247,9 +258,9 @@
         </Grid>
 
         <!-- ============ status bar ============ -->
-        <Border Grid.Row="2" Background="White" BorderBrush="{StaticResource CardBorder}" BorderThickness="0,1,0,0" Padding="24,7">
+        <Border Grid.Row="2" Background="{DynamicResource SurfaceBackground}" BorderBrush="{DynamicResource CardBorder}" BorderThickness="0,1,0,0" Padding="24,7">
             <Grid>
-                <TextBlock Text="{Binding StatusText}" Foreground="{StaticResource TextPrimary}" FontSize="12.5" TextTrimming="CharacterEllipsis" Margin="0,0,260,0"/>
+                <TextBlock Text="{Binding StatusText}" Foreground="{DynamicResource TextPrimary}" FontSize="12.5" TextTrimming="CharacterEllipsis" Margin="0,0,260,0"/>
                 <TextBlock Text="Ctrl+O open    Ctrl+E export    drop a level anywhere" Style="{StaticResource Caption}" HorizontalAlignment="Right"/>
             </Grid>
         </Border>

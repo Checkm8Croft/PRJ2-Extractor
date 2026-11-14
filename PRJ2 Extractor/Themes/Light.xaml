@@ -1,0 +1,27 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Light palette. Every brush is looked up with DynamicResource, so ThemeService can swap this file at run time. -->
+    <SolidColorBrush x:Key="WindowBackground" Color="#F3F4F6"/>
+    <SolidColorBrush x:Key="SurfaceBackground" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="ControlBackground" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="CardBackground" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="CardBorder" Color="#E3E6EB"/>
+    <SolidColorBrush x:Key="FieldBorder" Color="#D2D6DD"/>
+    <SolidColorBrush x:Key="TextPrimary" Color="#1F2430"/>
+    <SolidColorBrush x:Key="TextSecondary" Color="#6B7280"/>
+    <SolidColorBrush x:Key="Accent" Color="#2F6FED"/>
+    <SolidColorBrush x:Key="AccentHover" Color="#2160DD"/>
+    <SolidColorBrush x:Key="AccentPressed" Color="#1A4FB8"/>
+    <SolidColorBrush x:Key="AccentSoft" Color="#E8F0FE"/>
+    <SolidColorBrush x:Key="AccentRing" Color="#9DBBF7"/>
+    <SolidColorBrush x:Key="PreviewBackground" Color="#24272E"/>
+    <SolidColorBrush x:Key="PreviewText" Color="#8B93A1"/>
+    <SolidColorBrush x:Key="HoverFill" Color="#F3F4F6"/>
+    <SolidColorBrush x:Key="PressedFill" Color="#E6E8EC"/>
+    <SolidColorBrush x:Key="LogInfo" Color="#6B7280"/>
+    <SolidColorBrush x:Key="LogSuccess" Color="#1E8E4E"/>
+    <SolidColorBrush x:Key="LogWarning" Color="#B7791F"/>
+    <SolidColorBrush x:Key="LogError" Color="#D64545"/>
+
+</ResourceDictionary>

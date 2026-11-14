@@ -9,6 +9,8 @@
     <UseWPF>true</UseWPF>
     <ApplicationIcon>PRJ2.ico</ApplicationIcon>
     <NoWarn>$(NoWarn);WPF0001</NoWarn>
+    <!-- Folder with TombLib.dll and its dependencies; override it with -p:TombEditorDir=... when it is not here (e.g. building from macOS). -->
+    <TombEditorDir Condition="'$(TombEditorDir)' == ''">C:\Tomb Editor</TombEditorDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,8 +18,8 @@
   </ItemGroup>
 
   <!-- TombLib's NG trigger catalog: needed to split the timer / extra of NG flipeffect and action triggers. -->
-  <ItemGroup Condition="Exists('C:\Tomb Editor\Catalogs\NgCatalog.xml')">
-    <None Include="C:\Tomb Editor\Catalogs\NgCatalog.xml" Link="Catalogs\NgCatalog.xml" CopyToOutputDirectory="PreserveNewest" />
+  <ItemGroup Condition="Exists('$(TombEditorDir)\Catalogs\NgCatalog.xml')">
+    <None Include="$(TombEditorDir)\Catalogs\NgCatalog.xml" Link="Catalogs\NgCatalog.xml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
@@ -25,99 +27,99 @@
 
   <ItemGroup>
     <Reference Include="TombLib">
-      <HintPath>C:\Tomb Editor\TombLib.dll</HintPath>
+      <HintPath>$(TombEditorDir)\TombLib.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="AssimpNet">
-      <HintPath>C:\Tomb Editor\AssimpNet.dll</HintPath>
+      <HintPath>$(TombEditorDir)\AssimpNet.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="Blake3">
-      <HintPath>C:\Tomb Editor\Blake3.dll</HintPath>
+      <HintPath>$(TombEditorDir)\Blake3.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="bzPSD">
-      <HintPath>C:\Tomb Editor\bzPSD.dll</HintPath>
+      <HintPath>$(TombEditorDir)\bzPSD.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="ColorThief.Netstandard.v20">
-      <HintPath>C:\Tomb Editor\ColorThief.Netstandard.v20.dll</HintPath>
+      <HintPath>$(TombEditorDir)\ColorThief.Netstandard.v20.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="DirectXTexNet">
-      <HintPath>C:\Tomb Editor\DirectXTexNet.dll</HintPath>
+      <HintPath>$(TombEditorDir)\DirectXTexNet.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="FreeImage.Standard">
-      <HintPath>C:\Tomb Editor\FreeImage.Standard.dll</HintPath>
+      <HintPath>$(TombEditorDir)\FreeImage.Standard.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="K4os.Compression.LZ4">
-      <HintPath>C:\Tomb Editor\K4os.Compression.LZ4.dll</HintPath>
+      <HintPath>$(TombEditorDir)\K4os.Compression.LZ4.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="K4os.Compression.LZ4.Streams">
-      <HintPath>C:\Tomb Editor\K4os.Compression.LZ4.Streams.dll</HintPath>
+      <HintPath>$(TombEditorDir)\K4os.Compression.LZ4.Streams.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="K4os.Hash.xxHash">
-      <HintPath>C:\Tomb Editor\K4os.Hash.xxHash.dll</HintPath>
+      <HintPath>$(TombEditorDir)\K4os.Hash.xxHash.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="NAudio">
-      <HintPath>C:\Tomb Editor\NAudio.dll</HintPath>
+      <HintPath>$(TombEditorDir)\NAudio.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="NAudio.Core">
-      <HintPath>C:\Tomb Editor\NAudio.Core.dll</HintPath>
+      <HintPath>$(TombEditorDir)\NAudio.Core.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="NAudio.Flac">
-      <HintPath>C:\Tomb Editor\NAudio.Flac.dll</HintPath>
+      <HintPath>$(TombEditorDir)\NAudio.Flac.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="NAudio.Vorbis">
-      <HintPath>C:\Tomb Editor\NAudio.Vorbis.dll</HintPath>
+      <HintPath>$(TombEditorDir)\NAudio.Vorbis.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="NAudio.WinMM">
-      <HintPath>C:\Tomb Editor\NAudio.WinMM.dll</HintPath>
+      <HintPath>$(TombEditorDir)\NAudio.WinMM.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="NAudio.Wasapi">
-      <HintPath>C:\Tomb Editor\NAudio.Wasapi.dll</HintPath>
+      <HintPath>$(TombEditorDir)\NAudio.Wasapi.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="NAudio.Asio">
-      <HintPath>C:\Tomb Editor\NAudio.Asio.dll</HintPath>
+      <HintPath>$(TombEditorDir)\NAudio.Asio.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="NAudio.Midi">
-      <HintPath>C:\Tomb Editor\NAudio.Midi.dll</HintPath>
+      <HintPath>$(TombEditorDir)\NAudio.Midi.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="NVorbis">
-      <HintPath>C:\Tomb Editor\NVorbis.dll</HintPath>
+      <HintPath>$(TombEditorDir)\NVorbis.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="NLog">
-      <HintPath>C:\Tomb Editor\NLog.dll</HintPath>
+      <HintPath>$(TombEditorDir)\NLog.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="Pfim">
-      <HintPath>C:\Tomb Editor\Pfim.dll</HintPath>
+      <HintPath>$(TombEditorDir)\Pfim.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="Microsoft.IO.RecyclableMemoryStream">
-      <HintPath>C:\Tomb Editor\Microsoft.IO.RecyclableMemoryStream.dll</HintPath>
+      <HintPath>$(TombEditorDir)\Microsoft.IO.RecyclableMemoryStream.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="System.IO.Hashing">
-      <HintPath>C:\Tomb Editor\System.IO.Hashing.dll</HintPath>
+      <HintPath>$(TombEditorDir)\System.IO.Hashing.dll</HintPath>
       <Private>true</Private>
     </Reference>
     <Reference Include="Newtonsoft.Json">
-      <HintPath>C:\Tomb Editor\Newtonsoft.Json.dll</HintPath>
+      <HintPath>$(TombEditorDir)\Newtonsoft.Json.dll</HintPath>
       <Private>true</Private>
     </Reference>
   </ItemGroup>
