@@ -24,6 +24,10 @@ Tested levels:
 
 - tr1: recovered non-planar floor and ceiling heights from #11
 
+### Interface
+
+- Light and dark theme, following the Windows setting by default (or chosen from the header), remembered between runs
+
 ### Textures
 
 Implemented, will cover around the 95-97% of the level
