@@ -12,13 +12,12 @@ namespace PRJ2_Extractor.ViewModels;
 
 public enum LogLevel { Info, Success, Warning, Error }
 
-public sealed record LogEntry(string Time, LogLevel Level, string Message);
+public sealed record LogEntry(string Time, LogLevel Level, string Message, string? Details = null);
 
 /// <summary>State and commands of the main window: open a TR4/TR5 level, preview its textures, export a Tomb Editor .prj2.</summary>
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
     public const string Version = "0.3";
-    private const int MaxWarningsLogged = 60;
 
     private LevelSession? _session;
     private string _levelName = "";
@@ -50,6 +49,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ZoomInCommand = new RelayCommand(() => Zoom *= 1.25);
         ZoomOutCommand = new RelayCommand(() => Zoom /= 1.25);
         ActualSizeCommand = new RelayCommand(() => Zoom = 1.0);
+        LogEntries.CollectionChanged += (_, _) => OnPropertyChanged(nameof(FullLogText));
     }
 
     // ---- level
@@ -143,6 +143,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public bool IsDragOver { get => _isDragOver; set => SetProperty(ref _isDragOver, value); }
 
     public ObservableCollection<LogEntry> LogEntries { get; } = [];
+    public string FullLogText => LogEntries.Count == 0
+        ? "No log entries yet."
+        : string.Join(Environment.NewLine, LogEntries.Select(entry =>
+            $"{entry.Time} [{entry.Level.ToString().ToUpperInvariant()}] {entry.Message}"
+            + (entry.Details == null ? "" : $"{Environment.NewLine}{entry.Details}")));
 
     public ICommand OpenLevelCommand { get; }
     public ICommand CloseLevelCommand { get; }
@@ -184,22 +189,23 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public async Task LoadLevelAsync(string path)
     {
         if (IsBusy) return;
+        Log(LogLevel.Info, $"Opening level: {path}");
         BeginBusy($"Reading {Path.GetFileName(path)}...", indeterminate: false);
         try
         {
             var session = await LevelSession.LoadAsync(path, new Progress<int>(v => Progress = v));
             ReplaceSession(session);
-            Log(LogLevel.Success, $"Opened {Path.GetFileName(path)} ({session.FormatName}): {session.RoomCount} rooms.");
+            Log(LogLevel.Success, $"Opened {path} ({session.FormatName}): {session.RoomCount} rooms.");
             StatusText = $"{LevelName} is ready to export.";
         }
         catch (LevelLoadException ex)
         {
-            Log(LogLevel.Error, $"{Path.GetFileName(path)}: {ex.Message}");
+            Log(LogLevel.Error, $"{path}: {ex.Message}", ex);
             StatusText = "The level could not be opened.";
         }
         catch (Exception ex)
         {
-            Log(LogLevel.Error, $"{Path.GetFileName(path)}: unexpected error: {ex.Message}");
+            Log(LogLevel.Error, $"{path}: unexpected error: {ex.Message}", ex);
             StatusText = "The level could not be opened.";
         }
         finally
@@ -312,10 +318,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (result.Warnings.Count > 0)
             {
                 Log(LogLevel.Warning, $"{result.Warnings.Count} warning(s) during the export:");
-                foreach (var warning in result.Warnings.Take(MaxWarningsLogged))
+                foreach (var warning in result.Warnings)
                     Log(LogLevel.Warning, warning);
-                if (result.Warnings.Count > MaxWarningsLogged)
-                    Log(LogLevel.Warning, $"...and {result.Warnings.Count - MaxWarningsLogged} more.");
             }
 
             StatusText = result.Warnings.Count == 0
@@ -324,7 +328,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            Log(LogLevel.Error, $"The export failed: {ex.Message}");
+            Log(LogLevel.Error, $"The export failed: {ex.Message}", ex);
             StatusText = "The export failed.";
         }
         finally
@@ -362,7 +366,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         catch (Exception ex)
         {
-            Log(LogLevel.Error, $"Could not save the texture: {ex.Message}");
+            Log(LogLevel.Error, $"Could not save the texture: {ex.Message}", ex);
         }
     }
 
@@ -384,8 +388,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         BusyText = "";
     }
 
-    private void Log(LogLevel level, string message) =>
-        LogEntries.Add(new LogEntry(DateTime.Now.ToString("HH:mm:ss"), level, message));
+    private void Log(LogLevel level, string message, Exception? exception = null) =>
+        LogEntries.Add(new LogEntry(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"), level, message, exception?.ToString()));
 
     public void Dispose() => _session?.Dispose();
 }

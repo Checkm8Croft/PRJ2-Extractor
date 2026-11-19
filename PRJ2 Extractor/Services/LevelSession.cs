@@ -5,7 +5,7 @@ using PRJ2_Extractor.Core;
 namespace PRJ2_Extractor.Services;
 
 /// <summary>Raised when a level file cannot be read; the message is meant for the user.</summary>
-public sealed class LevelLoadException(string message) : Exception(message);
+public sealed class LevelLoadException(string message, Exception? innerException = null) : Exception(message, innerException);
 
 /// <summary>What an export produced. <paramref name="Notes"/> are informational lines (not problems) about what was converted.</summary>
 public sealed record ExportResult(string Prj2Path, IReadOnlyList<string> Warnings, IReadOnlyList<string> WrittenFiles, TimeSpan Elapsed,
@@ -110,15 +110,15 @@ public sealed class LevelSession : IDisposable
         {
             result = level.Load(path, progress);
         }
-        catch (EndOfStreamException)
+        catch (EndOfStreamException ex)
         {
             level.Dispose();
-            throw new LevelLoadException("The file ends unexpectedly; it is truncated or damaged.");
+            throw new LevelLoadException("The file ends unexpectedly; it is truncated or damaged.", ex);
         }
         catch (Exception ex)
         {
             level.Dispose();
-            throw new LevelLoadException($"The level could not be read: {ex.Message}");
+            throw new LevelLoadException($"The level could not be read: {ex.Message}", ex);
         }
 
         if (result != 0)
@@ -151,7 +151,7 @@ public sealed class LevelSession : IDisposable
         }
         catch (Exception ex)
         {
-            throw new LevelLoadException($"The level could not be read: {ex.Message}");
+            throw new LevelLoadException($"The level could not be read: {ex.Message}", ex);
         }
         if (error != null) throw new LevelLoadException(error);
         return new LevelSession(ten, path);

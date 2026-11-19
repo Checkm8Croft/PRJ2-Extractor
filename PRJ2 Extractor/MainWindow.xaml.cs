@@ -83,6 +83,11 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(() => FitWidth(maxZoom: 2), DispatcherPriority.Loaded);
     }
 
+    private void ShowFullLogs_Click(object sender, RoutedEventArgs e)
+    {
+        new LogWindow(_viewModel) { Owner = this }.Show();
+    }
+
     // ---- activity log
     private void ScrollLogToEnd()
     {
