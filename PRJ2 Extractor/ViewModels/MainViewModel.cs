@@ -1,6 +1,9 @@
 ﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Runtime.Loader;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
@@ -50,6 +53,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ZoomOutCommand = new RelayCommand(() => Zoom /= 1.25);
         ActualSizeCommand = new RelayCommand(() => Zoom = 1.0);
         LogEntries.CollectionChanged += (_, _) => OnPropertyChanged(nameof(FullLogText));
+        AssemblyLoadContext.Default.Resolving += OnAssemblyResolving;
+        LogRuntimeDiagnostics();
     }
 
     // ---- level
@@ -388,8 +393,122 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         BusyText = "";
     }
 
-    private void Log(LogLevel level, string message, Exception? exception = null) =>
-        LogEntries.Add(new LogEntry(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"), level, message, exception?.ToString()));
+    private void LogRuntimeDiagnostics()
+    {
+        Log(LogLevel.Info, $"Runtime: {RuntimeInformation.FrameworkDescription}; process architecture: {RuntimeInformation.ProcessArchitecture}; base directory: {AppContext.BaseDirectory}");
 
-    public void Dispose() => _session?.Dispose();
+        var tombLibPath = Path.Combine(AppContext.BaseDirectory, "TombLib.dll");
+        if (!File.Exists(tombLibPath))
+        {
+            Log(LogLevel.Error, $"TombLib.dll is missing from the application directory: {tombLibPath}");
+            return;
+        }
+
+        try
+        {
+            var identity = AssemblyName.GetAssemblyName(tombLibPath);
+            var machine = GetPeMachine(tombLibPath);
+            Log(LogLevel.Info, $"TombLib candidate: {identity.FullName}; PE machine: {machine}; path: {tombLibPath}");
+
+            var expectedIdentity = Assembly.GetEntryAssembly()?.GetReferencedAssemblies()
+                .FirstOrDefault(reference => string.Equals(reference.Name, "TombLib", StringComparison.OrdinalIgnoreCase));
+            if (expectedIdentity == null)
+            {
+                Log(LogLevel.Warning, "The entry assembly has no direct TombLib reference.");
+                return;
+            }
+
+            if (identity.Version != expectedIdentity.Version)
+            {
+                Log(LogLevel.Error, $"The application requires {expectedIdentity.FullName}, but the file beside it is {identity.FullName}.");
+                return;
+            }
+
+            if ((machine == "ARM64" && RuntimeInformation.ProcessArchitecture != Architecture.Arm64)
+                || (machine == "AMD64" && RuntimeInformation.ProcessArchitecture != Architecture.X64))
+            {
+                Log(LogLevel.Error, $"TombLib PE machine {machine} is incompatible with process architecture {RuntimeInformation.ProcessArchitecture}.");
+                return;
+            }
+
+            var loadedAssembly = AssemblyLoadContext.Default.Assemblies
+                .FirstOrDefault(assembly => string.Equals(assembly.GetName().Name, "TombLib", StringComparison.OrdinalIgnoreCase));
+            if (loadedAssembly == null)
+                loadedAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(tombLibPath);
+
+            Log(LogLevel.Success, $"TombLib loaded successfully: {loadedAssembly.GetName().FullName}");
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Error, $"TombLib.dll exists but could not be validated or loaded: {tombLibPath}", ex);
+        }
+    }
+
+    private Assembly? OnAssemblyResolving(AssemblyLoadContext context, AssemblyName requestedName)
+    {
+        if (requestedName.Name == null || requestedName.Name.EndsWith(".resources", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        var candidatePath = Path.Combine(AppContext.BaseDirectory, requestedName.Name + ".dll");
+        if (!File.Exists(candidatePath))
+        {
+            Log(LogLevel.Error, $"Could not resolve assembly {requestedName.FullName}; no candidate exists at {candidatePath}");
+            return null;
+        }
+
+        try
+        {
+            var candidateName = AssemblyName.GetAssemblyName(candidatePath);
+            if (!string.Equals(candidateName.Name, requestedName.Name, StringComparison.OrdinalIgnoreCase)
+                || candidateName.Version != requestedName.Version)
+            {
+                Log(LogLevel.Error, $"Could not resolve assembly {requestedName.FullName}; candidate at {candidatePath} is {candidateName.FullName}");
+                return null;
+            }
+
+            var assembly = context.LoadFromAssemblyPath(candidatePath);
+            Log(LogLevel.Info, $"Resolved assembly {requestedName.FullName} from {candidatePath}");
+            return assembly;
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Error, $"Found {candidatePath} for {requestedName.FullName}, but the runtime could not load it", ex);
+            return null;
+        }
+    }
+
+    private static string GetPeMachine(string path)
+    {
+        using var stream = File.OpenRead(path);
+        using var reader = new BinaryReader(stream);
+        stream.Position = 0x3c;
+        var peHeaderOffset = reader.ReadInt32();
+        if (peHeaderOffset < 0 || peHeaderOffset > stream.Length - sizeof(uint) - sizeof(ushort))
+            throw new BadImageFormatException("The file has an invalid PE header.");
+
+        stream.Position = peHeaderOffset + sizeof(uint);
+        return reader.ReadUInt16() switch
+        {
+            0x014c => "I386",
+            0x8664 => "AMD64",
+            0xAA64 => "ARM64",
+            var machine => $"0x{machine:X4}"
+        };
+    }
+
+    private void Log(LogLevel level, string message, Exception? exception = null)
+    {
+        var entry = new LogEntry(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"), level, message, exception?.ToString());
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess())
+            LogEntries.Add(entry);
+        else
+            dispatcher.Invoke(() => LogEntries.Add(entry));
+    }
+
+    public void Dispose()
+    {
+        AssemblyLoadContext.Default.Resolving -= OnAssemblyResolving;
+        _session?.Dispose();
+    }
 }
