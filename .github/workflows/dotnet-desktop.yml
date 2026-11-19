@@ -43,6 +43,18 @@ jobs:
       - name: Publish app
         run: dotnet publish "$env:PROJECT_PATH" --configuration Release --output "$env:OUTPUT_DIR" --no-restore
 
+      - name: Add NLog runtime dependency
+        shell: pwsh
+        run: |
+          $packagePath = Join-Path $env:RUNNER_TEMP "nlog.5.0.0.nupkg"
+          $extractPath = Join-Path $env:RUNNER_TEMP "nlog.5.0.0"
+          Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/nlog/5.0.0/nlog.5.0.0.nupkg" -OutFile $packagePath
+          Expand-Archive -Path $packagePath -DestinationPath $extractPath -Force
+          $nlogPath = Join-Path $extractPath "lib/netstandard2.0/NLog.dll"
+          if (-not (Test-Path $nlogPath)) { throw "NLog.dll not found in the NLog 5.0.0 package" }
+          Copy-Item -Path $nlogPath -Destination "$env:OUTPUT_DIR" -Force
+          if (-not (Test-Path "$env:OUTPUT_DIR/NLog.dll")) { throw "NLog.dll was not added to the publish output" }
+
       - name: Zip publish output
         shell: pwsh
         run: |
