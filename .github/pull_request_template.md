@@ -10,7 +10,4 @@
 
 ...write your content here...
 
-
-## Screenshots
-
-optional
+## Additional Contents

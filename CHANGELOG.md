@@ -24,7 +24,7 @@ Tested levels:
 
 - tr1: recovered non-planar floor and ceiling heights from #11
 
-### Interface
+### UI
 
 - Light and dark theme, following the Windows setting by default (or chosen from the header), remembered between runs
 

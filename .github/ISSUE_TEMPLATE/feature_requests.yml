@@ -12,7 +12,7 @@ body:
     id: idea
     attributes:
       label: What would you like to see?
-      description: Describe your suggestion clearly.
+      description: Describe your suggestion clearly. Set also the tag flair on the feature request issue, so we can categorize it better.
       placeholder: I'd like to see the support for TEN levels.
     validations:
       required: true
@@ -21,6 +21,6 @@ body:
     id: proposed_behavior
     attributes:
       label: Extra context
-      description: Add any other kind of content such as screenshots.
+      description: Add any other kind of content such as screenshots or logs.
     validations:
       required: false

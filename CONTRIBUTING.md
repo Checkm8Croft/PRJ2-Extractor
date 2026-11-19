@@ -10,6 +10,8 @@
 
 Compile the project using Visual Studio or with `dotnet build`
 
+**Note that the program will not work on arm64 Windows, so you must compile the program for `win-x64`**
+
 `PRJ2 Extractor/` is the main program
 `PrjDiag` is the program used by Claude for comparing the prj2 extracteds
 `DOCUMENTATION.md` is the files used by Claude for taking notes about the progress of the program

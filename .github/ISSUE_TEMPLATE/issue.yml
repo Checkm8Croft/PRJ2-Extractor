@@ -34,13 +34,14 @@ body:
         - TR4
         - TR5
         - TRNG
+        - TEN
     validations:
       required: true
 
   - type: textarea
     id: details
     attributes:
-      label: Describe the issue clearly, so we can reproduce it goodly
+      label: Describe the issue clearly, by sending us the necessary information and addtional logs and screenshots, so we can reproduce it goodly
       placeholder: |
         I've selected a TR2 level and the textures doesn't use the correct path.
         The textures are located in (dir1) but Tomb Editor indicates (dir2)
