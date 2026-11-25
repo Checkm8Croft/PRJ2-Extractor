@@ -1,0 +1,15 @@
+<Window x:Class="PRJ2_Extractor.ConfirmDialog"
+        xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="440" SizeToContent="Height" CanResize="False"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource WindowBackground}"
+        ShowInTaskbar="False">
+    <StackPanel Margin="22">
+        <TextBlock x:Name="MessageText" TextWrapping="Wrap" FontSize="14" Foreground="{DynamicResource TextPrimary}"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
+            <Button x:Name="YesButton" Content="Yes" Theme="{StaticResource SecondaryButton}" MinWidth="80" Click="Yes_Click"/>
+            <Button x:Name="NoButton" Content="No" Theme="{StaticResource PrimaryButton}" MinWidth="80" Margin="8,0,0,0" Click="No_Click" IsDefault="True"/>
+        </StackPanel>
+    </StackPanel>
+</Window>

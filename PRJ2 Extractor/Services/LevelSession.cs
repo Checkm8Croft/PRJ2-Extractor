@@ -1,5 +1,4 @@
 ﻿using System.IO;
-using System.Windows.Media.Imaging;
 using PRJ2_Extractor.Core;
 
 namespace PRJ2_Extractor.Services;
@@ -15,8 +14,8 @@ public sealed record ExportResult(string Prj2Path, IReadOnlyList<string> Warning
 public sealed record LevelStat(string Label, string Value);
 
 /// <summary>
-/// A loaded Tomb Raider 4 / 5 or TombEngine level and the operations the UI needs on it. Everything here is free of UI types except the
-/// texture preview bitmap, which is frozen after loading so that the background export thread and the UI thread can both read it.
+/// A loaded Tomb Raider or TombEngine level and the operations the UI needs on it. Nothing here depends on the UI toolkit: the texture
+/// preview is plain pixels (or a PNG file for TombEngine) that the window turns into a bitmap.
 /// </summary>
 public sealed class LevelSession : IDisposable
 {
@@ -32,8 +31,10 @@ public sealed class LevelSession : IDisposable
     public int RoomCount => Ten?.Rooms.Count ?? Level!.NumRooms;
     public IReadOnlyList<LevelStat> Stats { get; }
 
-    /// <summary>First texture atlas of the level for the preview (null when there is none or it cannot be decoded).</summary>
-    public BitmapSource? TextureBitmap { get; }
+    /// <summary>Texture atlas of a Tomb Raider level for the preview (null when there is none).</summary>
+    public PixelBuffer? TextureBitmap { get; }
+    /// <summary>First room atlas of a TombEngine level, as the PNG file it is stored as (null when there is none or it is not a PNG).</summary>
+    public byte[]? TexturePng { get; }
     /// <summary>True when the atlas is a stack of 256 x 256 tiles (TR4 / TR5); TombEngine atlases are single large pages.</summary>
     public bool TextureIsTiled => Ten == null;
 
@@ -58,7 +59,7 @@ public sealed class LevelSession : IDisposable
     {
         Ten = ten;
         FilePath = filePath;
-        TextureBitmap = DecodeAtlas(ten);
+        TexturePng = FirstPngAtlas(ten);
         Stats =
         [
             new("Rooms", ten.Rooms.Count.ToString("N0")),
@@ -73,20 +74,10 @@ public sealed class LevelSession : IDisposable
     }
 
     /// <summary>PNG atlases only; DDS (BC1 / BC3) ones are not decoded, so there is no preview for them.</summary>
-    private static BitmapSource? DecodeAtlas(TenLevel ten)
+    private static byte[]? FirstPngAtlas(TenLevel ten)
     {
         var blob = ten.RoomAtlases.FirstOrDefault()?.ColorMap;
-        if (blob == null || blob.Length < 8 || blob[0] != 0x89 || blob[1] != 0x50 || blob[2] != 0x4E || blob[3] != 0x47) return null;
-        try
-        {
-            var frame = BitmapFrame.Create(new MemoryStream(blob), BitmapCreateOptions.None, BitmapCacheOption.OnLoad);
-            frame.Freeze();
-            return frame;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
+        return blob != null && blob.Length >= 8 && blob[0] == 0x89 && blob[1] == 0x50 && blob[2] == 0x4E && blob[3] == 0x47 ? blob : null;
     }
 
     public static bool IsSupportedExtension(string path) =>
@@ -132,10 +123,6 @@ public sealed class LevelSession : IDisposable
                 _ => "The level could not be read (damaged or unsupported file)."
             });
         }
-
-        // The bitmap was created on this worker thread; freezing it makes it readable from any thread.
-        if (level.TextureBitmap is { IsFrozen: false } bitmap)
-            bitmap.Freeze();
 
         return new LevelSession(level, path);
     });

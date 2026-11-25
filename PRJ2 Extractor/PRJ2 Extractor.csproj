@@ -2,21 +2,29 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <RootNamespace>PRJ2_Extractor</RootNamespace>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <UseWPF>true</UseWPF>
     <ApplicationIcon>PRJ2.ico</ApplicationIcon>
-    <NoWarn>$(NoWarn);WPF0001</NoWarn>
+    <AvaloniaUseCompiledBindingsByDefault>false</AvaloniaUseCompiledBindingsByDefault>
+    <!-- TombLib is built for net6.0-windows, so every call into it is flagged as Windows-only; the port to other systems depends on TombLib itself. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
     <!-- Folder with TombLib.dll and its dependencies; override it with -p:TombEditorDir=... when it is not here (e.g. building from macOS). -->
     <TombEditorDir Condition="'$(TombEditorDir)' == ''">C:\Tomb Editor</TombEditorDir>
   </PropertyGroup>
 
   <ItemGroup>
     <Content Include="PRJ2.ico" />
+    <AvaloniaResource Include="PRJ2.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.23" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.23" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.23" />
   </ItemGroup>
 
   <!-- TombLib's NG trigger catalog: needed to split the timer / extra of NG flipeffect and action triggers. -->

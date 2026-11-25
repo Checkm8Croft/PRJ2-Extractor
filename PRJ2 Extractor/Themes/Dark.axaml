@@ -1,7 +1,7 @@
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- Dark palette. Every brush is looked up with DynamicResource, so ThemeService can swap this file at run time. -->
+    <!-- Dark palette. Every brush is looked up with DynamicResource, so the theme variant can change while the app runs. -->
     <SolidColorBrush x:Key="WindowBackground" Color="#14161B"/>
     <SolidColorBrush x:Key="SurfaceBackground" Color="#1B1E25"/>
     <SolidColorBrush x:Key="ControlBackground" Color="#262B34"/>
