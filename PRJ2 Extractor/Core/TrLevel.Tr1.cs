@@ -1,8 +1,5 @@
 ﻿using System.IO;
 using System.Numerics;
-using System.Windows;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using PRJ2_Extractor.Models;
 
 namespace PRJ2_Extractor.Core;
@@ -295,7 +292,7 @@ public partial class TrLevel
         return texture;
     }
 
-    private static WriteableBitmap BuildTr1Atlas(byte[] textiles, byte[] palette, int numTextiles)
+    private static PixelBuffer BuildTr1Atlas(byte[] textiles, byte[] palette, int numTextiles)
     {
         int height = numTextiles * 256;
         var pixels = new byte[256 * height * 3];
@@ -315,8 +312,6 @@ public partial class TrLevel
                 pixels[o++] = Scale6(palette[index * 3]);     // R
             }
         }
-        var bmp = new WriteableBitmap(256, height, 96, 96, PixelFormats.Bgr24, null);
-        bmp.WritePixels(new Int32Rect(0, 0, 256, height), pixels, 256 * 3, 0);
-        return bmp;
+        return new PixelBuffer(256, height, pixels);
     }
 }

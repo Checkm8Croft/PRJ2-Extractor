@@ -1,9 +1,6 @@
 ﻿using System.IO;
 using System.IO.Compression;
 using System.Text;
-using System.Windows;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using PRJ2_Extractor.Models;
 
 namespace PRJ2_Extractor.Core;
@@ -13,7 +10,7 @@ public partial class TrLevel : IDisposable
     private const uint Tr4Signature = 0x00345254;
     private const uint Tr4Encrypted = 0x63345254;
 
-    public WriteableBitmap? TextureBitmap;
+    public PixelBuffer? TextureBitmap;
     public uint FileVersion;
     public ushort NumRoomTextiles, NumObjTextiles, NumBumpTextiles;
     public uint NumSounds;
@@ -335,9 +332,7 @@ public partial class TrLevel : IDisposable
             }
             tex32.Dispose();
 
-            var bmp = new WriteableBitmap(256, totalHeight, 96, 96, PixelFormats.Bgr24, null);
-            bmp.WritePixels(new Int32Rect(0, 0, 256, totalHeight), allPixels, 256 * 3, 0);
-            TextureBitmap = bmp;
+            TextureBitmap = new PixelBuffer(256, totalHeight, allPixels);
 
             memfile.Seek(4, SeekOrigin.Current);
             size = br.ReadUInt32();
@@ -445,8 +440,7 @@ public partial class TrLevel : IDisposable
             var s = $"{br2.ReadChar()}{br2.ReadChar()}{br2.ReadChar()}".ToLowerInvariant();
             if (s != "spr")
             {
-                MessageBox.Show("SPR landmark not read correctly!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                result = 4;
+                throw new InvalidDataException("SPR landmark not read correctly.");
             }
 
             progress?.Report((int)(memfile.Position * 100 / fileSize));
@@ -511,8 +505,7 @@ public partial class TrLevel : IDisposable
             s = $"{br2.ReadChar()}{br2.ReadChar()}{br2.ReadChar()}".ToLowerInvariant();
             if (s != "tex")
             {
-                MessageBox.Show("TEX landmark not read correctly!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                result = 4;
+                throw new InvalidDataException("TEX landmark not read correctly.");
             }
             size = br2.ReadUInt32();
             ObjectTextures = new ObjectTexture[size];
@@ -632,9 +625,7 @@ public partial class TrLevel : IDisposable
             }
             tex32.Dispose();
 
-            var bmp = new WriteableBitmap(256, totalHeight, 96, 96, PixelFormats.Bgr24, null);
-            bmp.WritePixels(new Int32Rect(0, 0, 256, totalHeight), allPixels, 256 * 3, 0);
-            TextureBitmap = bmp;
+            TextureBitmap = new PixelBuffer(256, totalHeight, allPixels);
 
             // Skip 16-bit fallback compressed textile block.
             memfile.Seek(4, SeekOrigin.Current);
@@ -661,8 +652,7 @@ public partial class TrLevel : IDisposable
             uint numRooms = br.ReadUInt32();
             if (numRooms > ushort.MaxValue)
             {
-                MessageBox.Show("TR5 room count exceeds supported range!", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
-                return 4;
+                throw new InvalidDataException("TR5 room count exceeds supported range.");
             }
             NumRooms = (ushort)numRooms;
             Rooms = new LevelRoom[NumRooms];
@@ -1282,7 +1272,7 @@ public partial class TrLevel : IDisposable
         // exactly those tiles, compacted and remapped to a dense 0..N-1 sequence.
         var (roomAtlas, tileRemap) = BuildRoomTextureAtlas();
 
-        if (saveTga && roomAtlas.PixelWidth > 0)
+        if (saveTga && roomAtlas.Width > 0)
         {
             var tgaPath = Path.ChangeExtension(filename, ".tga");
             TgaWriter.Save(roomAtlas, tgaPath);
@@ -1473,7 +1463,7 @@ public partial class TrLevel : IDisposable
     /// Load()). Returns the new compact bitmap plus the original-tile -> new-index remap that
     /// ToPrjTexInfo needs to compute correct Y offsets against it.
     /// </summary>
-    private (WriteableBitmap atlas, Dictionary<int, int> tileRemap) BuildRoomTextureAtlas()
+    private (PixelBuffer atlas, Dictionary<int, int> tileRemap) BuildRoomTextureAtlas()
     {
         // NOTE: an earlier version of this code excluded tiles >= NumRoomTextiles+NumObjTextiles,
         // on the theory that they were bump-map data (not plain diffuse colour). Direct visual
@@ -1502,19 +1492,16 @@ public partial class TrLevel : IDisposable
         for (int i = 0; i < tileList.Count; i++) remap[tileList[i]] = i;
 
         if (TextureBitmap == null || tileList.Count == 0)
-            return (TextureBitmap ?? new WriteableBitmap(256, 256, 96, 96, PixelFormats.Bgr24, null), remap);
+            return (TextureBitmap ?? new PixelBuffer(256, 256), remap);
 
         int newHeight = tileList.Count * 256;
-        var newBmp = new WriteableBitmap(256, newHeight, 96, 96, PixelFormats.Bgr24, null);
-        int srcStride = TextureBitmap.PixelWidth * 3;
-        var rowBuf = new byte[srcStride * 256];
+        var newBmp = new PixelBuffer(256, newHeight);
 
         for (int i = 0; i < tileList.Count; i++)
         {
             int srcY = tileList[i] * 256;
-            if (srcY < 0 || srcY + 256 > TextureBitmap.PixelHeight) continue; // guard malformed data
-            TextureBitmap.CopyPixels(new Int32Rect(0, srcY, 256, 256), rowBuf, srcStride, 0);
-            newBmp.WritePixels(new Int32Rect(0, i * 256, 256, 256), rowBuf, srcStride, 0);
+            if (srcY < 0 || srcY + 256 > TextureBitmap.Height) continue; // guard malformed data
+            newBmp.CopyRowsFrom(TextureBitmap, srcY, i * 256, 256);
         }
 
         return (newBmp, remap);

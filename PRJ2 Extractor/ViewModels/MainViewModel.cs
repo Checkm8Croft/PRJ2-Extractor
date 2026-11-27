@@ -4,10 +4,9 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
-using System.Windows;
 using System.Windows.Input;
-using System.Windows.Media.Imaging;
-using Microsoft.Win32;
+using Avalonia.Media.Imaging;
+using Avalonia.Threading;
 using PRJ2_Extractor.Core;
 using PRJ2_Extractor.Services;
 
@@ -15,7 +14,13 @@ namespace PRJ2_Extractor.ViewModels;
 
 public enum LogLevel { Info, Success, Warning, Error }
 
-public sealed record LogEntry(string Time, LogLevel Level, string Message, string? Details = null);
+public sealed record LogEntry(string Time, LogLevel Level, string Message, string? Details = null)
+{
+    // One flag per level: the window colours the marker of a log line with them (a style class each).
+    public bool IsSuccess => Level == LogLevel.Success;
+    public bool IsWarning => Level == LogLevel.Warning;
+    public bool IsError => Level == LogLevel.Error;
+}
 
 /// <summary>State and commands of the main window: open a TR4/TR5 level, preview its textures, export a Tomb Editor .prj2.</summary>
 public sealed class MainViewModel : ObservableObject, IDisposable
@@ -27,7 +32,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _levelFolder = "";
     private string _levelFormat = "";
     private IReadOnlyList<LevelStat> _stats = [];
-    private BitmapSource? _textureSource;
+    private Bitmap? _textureSource;
     private double _zoom = 1.0;
     private string _outputFolder = "";
     private string _outputName = "";
@@ -42,11 +47,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public MainViewModel()
     {
-        OpenLevelCommand = new RelayCommand(OpenLevelDialog, () => !IsBusy);
+        OpenLevelCommand = new AsyncRelayCommand(OpenLevelDialogAsync, () => !IsBusy);
         CloseLevelCommand = new RelayCommand(CloseLevel, () => HasLevel && !IsBusy);
-        BrowseOutputCommand = new RelayCommand(BrowseOutput, () => HasLevel && !IsBusy);
+        BrowseOutputCommand = new AsyncRelayCommand(BrowseOutputAsync, () => HasLevel && !IsBusy);
         ExportCommand = new AsyncRelayCommand(ExportAsync, () => HasLevel && !IsBusy);
-        SaveTgaCommand = new RelayCommand(SaveTga, () => TextureSource != null && !IsBusy);
+        SaveTgaCommand = new AsyncRelayCommand(SaveTgaAsync, () => TextureSource != null && !IsBusy);
         ShowInFolderCommand = new RelayCommand(ShowInFolder, () => LastExportPath != null);
         ClearLogCommand = new RelayCommand(() => LogEntries.Clear(), () => LogEntries.Count > 0);
         ZoomInCommand = new RelayCommand(() => Zoom *= 1.25);
@@ -66,6 +71,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public string WindowTitle => HasLevel ? $"{LevelName} - PRJ2 Extractor" : "PRJ2 Extractor";
     public string VersionText => $"v{Version}";
 
+    /// <summary>The window's dialogs (file pickers, questions); set by the window that owns this view model.</summary>
+    public IDialogService? Dialogs { get; set; }
+
     // ---- colour theme
     public bool IsSystemTheme { get => ThemeService.Choice == ThemeChoice.System; set { if (value) SetTheme(ThemeChoice.System); } }
     public bool IsLightTheme { get => ThemeService.Choice == ThemeChoice.Light; set { if (value) SetTheme(ThemeChoice.Light); } }
@@ -81,7 +89,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     }
 
     // ---- texture preview
-    public BitmapSource? TextureSource
+    public Bitmap? TextureSource
     {
         get => _textureSource;
         private set
@@ -96,12 +104,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
     }
     public bool HasTexture => _textureSource != null;
-    public double TextureWidth => _textureSource?.PixelWidth ?? 0;
-    public double TextureHeight => _textureSource?.PixelHeight ?? 0;
+    public double TextureWidth => _textureSource?.PixelSize.Width ?? 0;
+    public double TextureHeight => _textureSource?.PixelSize.Height ?? 0;
     public string TextureCaption => _textureSource == null
         ? "No texture loaded"
-        : _textureTiled ? $"{_textureSource.PixelWidth} x {_textureSource.PixelHeight} px  -  {_textureSource.PixelHeight / 256} tiles"
-                        : $"{_textureSource.PixelWidth} x {_textureSource.PixelHeight} px  -  first room atlas";
+        : _textureTiled ? $"{_textureSource.PixelSize.Width} x {_textureSource.PixelSize.Height} px  -  {_textureSource.PixelSize.Height / 256} tiles"
+                        : $"{_textureSource.PixelSize.Width} x {_textureSource.PixelSize.Height} px  -  first room atlas";
 
     public double Zoom
     {
@@ -136,7 +144,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _isBusy, value))
             {
                 OnPropertyChanged(nameof(CanEditOutput));
-                CommandManager.InvalidateRequerySuggested();
+                CommandRequery.Invalidate();
             }
         }
     }
@@ -166,16 +174,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand ActualSizeCommand { get; }
 
     // ---- opening
-    private void OpenLevelDialog()
+    private async Task OpenLevelDialogAsync()
     {
-        var dialog = new OpenFileDialog
-        {
-            Title = "Open a Tomb Raider or TombEngine level",
-            Filter = "Levels (*.phd;*.tub;*.tr2;*.tr4;*.trc;*.ten)|*.phd;*.tub;*.tr2;*.tr4;*.trc;*.ten|Tomb Raider 1 (*.phd;*.tub)|*.phd;*.tub|Tomb Raider 2 / 3 (*.tr2)|*.tr2|Tomb Raider 4 (*.tr4)|*.tr4|Tomb Raider 5 (*.trc)|*.trc|TombEngine (*.ten)|*.ten|All files (*.*)|*.*",
-            InitialDirectory = HasLevel && Directory.Exists(LevelFolder) ? LevelFolder : ""
-        };
-        if (dialog.ShowDialog() == true)
-            _ = LoadLevelAsync(dialog.FileName);
+        if (Dialogs == null) return;
+        var path = await Dialogs.PickLevelAsync(HasLevel && Directory.Exists(LevelFolder) ? LevelFolder : null);
+        if (path != null)
+            await LoadLevelAsync(path);
     }
 
     /// <summary>Called by the window for a file dropped on it or passed on the command line.</summary>
@@ -229,7 +233,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         LevelFormat = session.FormatName;
         Stats = session.Stats;
         _textureTiled = session.TextureIsTiled;
-        TextureSource = session.TextureBitmap;
+        TextureSource = session.TextureBitmap != null ? BitmapConversion.ToBitmap(session.TextureBitmap)
+            : session.TexturePng != null ? BitmapConversion.FromPng(session.TexturePng) : null;
         Zoom = 1.0;
         OutputFolder = LevelFolder;
         OutputName = LevelName;
@@ -238,7 +243,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasLevel));
         OnPropertyChanged(nameof(CanEditOutput));
         OnPropertyChanged(nameof(WindowTitle));
-        CommandManager.InvalidateRequerySuggested();
+        CommandRequery.Invalidate();
     }
 
     private void CloseLevel()
@@ -254,19 +259,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasLevel));
         OnPropertyChanged(nameof(CanEditOutput));
         OnPropertyChanged(nameof(WindowTitle));
-        CommandManager.InvalidateRequerySuggested();
+        CommandRequery.Invalidate();
     }
 
     // ---- export
-    private void BrowseOutput()
+    private async Task BrowseOutputAsync()
     {
-        var dialog = new OpenFolderDialog
-        {
-            Title = "Choose where to save the Tomb Editor project",
-            InitialDirectory = Directory.Exists(OutputFolder) ? OutputFolder : LevelFolder
-        };
-        if (dialog.ShowDialog() == true)
-            OutputFolder = dialog.FolderName;
+        if (Dialogs == null) return;
+        var folder = await Dialogs.PickFolderAsync("Choose where to save the Tomb Editor project", Directory.Exists(OutputFolder) ? OutputFolder : LevelFolder);
+        if (folder != null)
+            OutputFolder = folder;
     }
 
     private string? ValidateOutput(out string prj2Path)
@@ -301,9 +303,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         if (File.Exists(prj2Path))
         {
-            var answer = MessageBox.Show($"{Path.GetFileName(prj2Path)} already exists in this folder.\n\nReplace it?",
-                "Replace project?", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
-            if (answer != MessageBoxResult.Yes) return;
+            var replace = Dialogs != null && await Dialogs.ConfirmAsync("Replace project?",
+                $"{Path.GetFileName(prj2Path)} already exists in this folder.\n\nReplace it?");
+            if (!replace) return;
         }
 
         BeginBusy("Exporting the Tomb Editor project...", indeterminate: true);
@@ -345,29 +347,33 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void ShowInFolder()
     {
         if (LastExportPath == null || !File.Exists(LastExportPath)) return;
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{LastExportPath}\"") { UseShellExecute = true });
+
+        ProcessStartInfo start;
+        if (OperatingSystem.IsWindows())
+            start = new ProcessStartInfo("explorer.exe", $"/select,\"{LastExportPath}\"") { UseShellExecute = true };
+        else if (OperatingSystem.IsMacOS())
+            start = new ProcessStartInfo("open", ["-R", LastExportPath]);
+        else
+            start = new ProcessStartInfo("xdg-open", [Path.GetDirectoryName(LastExportPath) ?? "."]);
+        try { Process.Start(start); }
+        catch (Exception ex) { Log(LogLevel.Warning, $"Could not show the project in its folder: {ex.Message}"); }
     }
 
     // ---- textures
-    private void SaveTga()
+    private async Task SaveTgaAsync()
     {
-        if (_session?.TextureBitmap is not { PixelWidth: > 0, PixelHeight: > 0 } bitmap) return;
+        if (_session == null || Dialogs == null) return;
+        var buffer = _session.TextureBitmap ?? (_session.TexturePng is { } png ? BitmapConversion.PngToPixelBuffer(png) : null);
+        if (buffer is not { Width: > 0, Height: > 0 }) return;
 
-        var dialog = new SaveFileDialog
-        {
-            Title = "Save the level's texture atlas",
-            DefaultExt = "tga",
-            Filter = "Targa image (*.tga)|*.tga",
-            FileName = $"{LevelName}_textures.tga",
-            InitialDirectory = Directory.Exists(OutputFolder) ? OutputFolder : LevelFolder
-        };
-        if (dialog.ShowDialog() != true) return;
+        var path = await Dialogs.PickTgaSaveAsync($"{LevelName}_textures.tga", Directory.Exists(OutputFolder) ? OutputFolder : LevelFolder);
+        if (path == null) return;
 
         try
         {
-            TgaWriter.Save(bitmap, dialog.FileName);
-            Log(LogLevel.Success, $"Saved {Path.GetFileName(dialog.FileName)} ({bitmap.PixelWidth} x {bitmap.PixelHeight} px).");
-            StatusText = $"Saved {Path.GetFileName(dialog.FileName)}.";
+            TgaWriter.Save(buffer, path);
+            Log(LogLevel.Success, $"Saved {Path.GetFileName(path)} ({buffer.Width} x {buffer.Height} px).");
+            StatusText = $"Saved {Path.GetFileName(path)}.";
         }
         catch (Exception ex)
         {
@@ -499,11 +505,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void Log(LogLevel level, string message, Exception? exception = null)
     {
         var entry = new LogEntry(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"), level, message, exception?.ToString());
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher == null || dispatcher.CheckAccess())
+        if (Dispatcher.UIThread.CheckAccess())
             LogEntries.Add(entry);
         else
-            dispatcher.Invoke(() => LogEntries.Add(entry));
+            Dispatcher.UIThread.Invoke(() => LogEntries.Add(entry));
     }
 
     public void Dispose()

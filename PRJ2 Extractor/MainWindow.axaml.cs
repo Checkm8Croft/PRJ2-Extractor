@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.IO;
-using System.Windows;
-using System.Windows.Input;
-using System.Windows.Threading;
+using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using PRJ2_Extractor.Services;
 using PRJ2_Extractor.ViewModels;
 
@@ -20,14 +22,22 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _viewModel;
+        _viewModel.Dialogs = new WindowDialogService(this);
 
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         _viewModel.LogEntries.CollectionChanged += (_, _) => ScrollLogToEnd();
-        Loaded += OnLoaded;
+
+        AddHandler(DragDrop.DragOverEvent, Window_DragOver);
+        AddHandler(DragDrop.DragLeaveEvent, Window_DragLeave);
+        AddHandler(DragDrop.DropEvent, Window_Drop);
+        // The wheel has to be seen before the scroll viewer scrolls with it.
+        PreviewScroller.AddHandler(PointerWheelChangedEvent, PreviewScroller_PointerWheel, RoutingStrategies.Tunnel);
+
+        Opened += OnOpened;
         Closed += (_, _) => _viewModel.Dispose();
     }
 
-    private void OnLoaded(object sender, RoutedEventArgs e)
+    private void OnOpened(object? sender, EventArgs e)
     {
         // "Open with" / drag onto the .exe: the first argument that is a file is the level to open.
         var path = Environment.GetCommandLineArgs().Skip(1).FirstOrDefault(File.Exists);
@@ -36,43 +46,45 @@ public partial class MainWindow : Window
     }
 
     // ---- drag and drop
-    private void Window_PreviewDragOver(object sender, DragEventArgs e)
+    private void Window_DragOver(object? sender, DragEventArgs e)
     {
         var file = FirstDroppedFile(e);
-        e.Effects = file != null && LevelSession.IsSupportedExtension(file) && !_viewModel.IsBusy ? DragDropEffects.Copy : DragDropEffects.None;
-        _viewModel.IsDragOver = e.Effects == DragDropEffects.Copy;
+        bool accepted = file != null && LevelSession.IsSupportedExtension(file) && !_viewModel.IsBusy;
+        e.DragEffects = accepted ? DragDropEffects.Copy : DragDropEffects.None;
+        _viewModel.IsDragOver = accepted;
         e.Handled = true;
     }
 
-    private void Window_DragLeave(object sender, DragEventArgs e) => _viewModel.IsDragOver = false;
+    private void Window_DragLeave(object? sender, DragEventArgs e) => _viewModel.IsDragOver = false;
 
-    private void Window_Drop(object sender, DragEventArgs e)
+    private void Window_Drop(object? sender, DragEventArgs e)
     {
         _viewModel.IsDragOver = false;
         var file = FirstDroppedFile(e);
         if (file != null)
             _viewModel.OpenDroppedFile(file);
+        e.Handled = true;
     }
 
     private static string? FirstDroppedFile(DragEventArgs e) =>
-        e.Data.GetDataPresent(DataFormats.FileDrop) && e.Data.GetData(DataFormats.FileDrop) is string[] files && files.Length > 0 ? files[0] : null;
+        e.DataTransfer.TryGetFiles()?.Select(item => item.TryGetLocalPath()).FirstOrDefault(path => path != null);
 
     // ---- texture preview zoom
-    private void FitButton_Click(object sender, RoutedEventArgs e) => FitWidth(maxZoom: 8);
+    private void FitButton_Click(object? sender, RoutedEventArgs e) => FitWidth(maxZoom: 8);
 
     /// <summary>Scales the atlas so that its width fills the preview area (never above <paramref name="maxZoom"/>).</summary>
     private void FitWidth(double maxZoom)
     {
         if (_viewModel.TextureWidth <= 0) return;
-        double available = (PreviewScroller.ViewportWidth > 0 ? PreviewScroller.ViewportWidth : PreviewScroller.ActualWidth) - 24;
+        double available = (PreviewScroller.Viewport.Width > 0 ? PreviewScroller.Viewport.Width : PreviewScroller.Bounds.Width) - 24;
         if (available <= 0) return;
         _viewModel.Zoom = Math.Min(maxZoom, available / _viewModel.TextureWidth);
     }
 
-    private void PreviewScroller_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    private void PreviewScroller_PointerWheel(object? sender, PointerWheelEventArgs e)
     {
-        if (Keyboard.Modifiers != ModifierKeys.Control) return; // a plain wheel scrolls the atlas
-        _viewModel.Zoom *= e.Delta > 0 ? 1.15 : 1 / 1.15;
+        if (e.KeyModifiers != KeyModifiers.Control) return; // a plain wheel scrolls the atlas
+        _viewModel.Zoom *= e.Delta.Y > 0 ? 1.15 : 1 / 1.15;
         e.Handled = true;
     }
 
@@ -80,18 +92,13 @@ public partial class MainWindow : Window
     {
         // A new level: show its atlas at a size that fits the preview (not magnified more than 2x).
         if (e.PropertyName == nameof(MainViewModel.TextureSource) && _viewModel.HasTexture)
-            Dispatcher.BeginInvoke(() => FitWidth(maxZoom: 2), DispatcherPriority.Loaded);
+            Dispatcher.UIThread.Post(() => FitWidth(maxZoom: 2), DispatcherPriority.Loaded);
     }
 
-    private void ShowFullLogs_Click(object sender, RoutedEventArgs e)
-    {
-        new LogWindow(_viewModel) { Owner = this }.Show();
-    }
+    private void ShowFullLogs_Click(object? sender, RoutedEventArgs e) =>
+        new LogWindow(_viewModel).Show(this);
 
     // ---- activity log
-    private void ScrollLogToEnd()
-    {
-        if (LogList.Items.Count == 0) return;
-        Dispatcher.BeginInvoke(() => LogList.ScrollIntoView(LogList.Items[^1]), DispatcherPriority.Background);
-    }
+    private void ScrollLogToEnd() =>
+        Dispatcher.UIThread.Post(() => LogScroller.ScrollToEnd(), DispatcherPriority.Background);
 }

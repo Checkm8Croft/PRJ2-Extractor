@@ -1,8 +1,5 @@
 using System.IO;
 using System.Numerics;
-using System.Windows;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using PRJ2_Extractor.Models;
 
 namespace PRJ2_Extractor.Core;
@@ -309,7 +306,7 @@ public partial class TrLevel
     }
 
     /// <summary>16-bit textiles (A1R5G5B5, bit 15 set = opaque) into the shared Bgr24 atlas; transparent pixels use the TR4 magenta placeholder.</summary>
-    private static WriteableBitmap BuildTr23Atlas(byte[] tex16, int numTextiles)
+    private static PixelBuffer BuildTr23Atlas(byte[] tex16, int numTextiles)
     {
         int height = numTextiles * 256;
         var pixels = new byte[256 * height * 3];
@@ -329,8 +326,6 @@ public partial class TrLevel
                 pixels[o++] = (byte)((r << 3) | (r >> 2));
             }
         }
-        var bmp = new WriteableBitmap(256, height, 96, 96, PixelFormats.Bgr24, null);
-        bmp.WritePixels(new Int32Rect(0, 0, 256, height), pixels, 256 * 3, 0);
-        return bmp;
+        return new PixelBuffer(256, height, pixels);
     }
 }
