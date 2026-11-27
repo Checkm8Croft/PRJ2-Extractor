@@ -40,8 +40,8 @@ jobs:
       - name: Run tests
         run: dotnet test "$env:SOLUTION_PATH" --configuration Release --no-build
 
-      - name: Publish app
-        run: dotnet publish "$env:PROJECT_PATH" --configuration Release --output "$env:OUTPUT_DIR" --no-restore
+      - name: Publish app (Windows x64, needs the .NET 10 runtime installed)
+        run: dotnet publish "$env:PROJECT_PATH" --configuration Release --runtime win-x64 --self-contained false --output "$env:OUTPUT_DIR" --no-restore
 
       - name: Add NLog runtime dependency
         shell: pwsh
